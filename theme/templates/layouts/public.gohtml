@@ -1,0 +1,63 @@
+{{/*
+  The Rivers storefront chrome, overriding layouts/public.gohtml.
+
+  The nav is two dropdowns and a cart button. The second dropdown is the reason this
+  theme exists in its current shape: the search and category form belongs in the
+  header, not above the grid.
+
+  It holds a "nav_extra" block and nothing else. The form itself is filled in by
+  pages/products.gohtml, which is the only page whose data has .Search, .Facets and
+  .Filtered on it — calling {{template "products_filters" .}} from here directly is
+  what broke every other page, because the cart and the checkout have no such
+  fields and a missing field fails the whole render. The block is empty everywhere
+  the catalog does not fill it.
+*/}}
+{{define "layout"}}
+{{template "document_head" .}}
+<body>
+<header class="site-header">
+  <div class="inner">
+    <a class="brand" href="/">
+      <img src="{{asset "logo.png"}}" alt="" width="28" height="28">
+    </a>
+    <nav>
+      <div class="dropdown">
+        <a href="/products">Shop</a>
+        <div class="dropdown_content">
+          <a href="/products">All Products</a>
+          <a href="/products?q=&category=apparel">Apparel</a>
+          <a href="/products?q=&category=books">Books</a>
+          <a href="/products?q=&category=conferences">Conferences</a>
+        </div>
+      </div>
+
+      <div class="dropdown">
+        <span>Search</span>
+        <div class="dropdown_content search">
+          {{block "nav_extra" .}}{{end}}
+        </div>
+      </div>
+      <a class="btn_small" href="/cart">Cart</a>
+    </nav>
+  </div>
+</header>
+<main>
+<div class="inner">
+{{block "content" .}}{{end}}
+</div>
+</main>
+<footer class="site-footer">
+  <div class="inner columns">
+    <div>
+      <strong>{{.StoreName}}</strong>
+      <p class="muted"><small>Powered by gostore.</small></p>
+    </div>
+    <nav>
+      <a href="/products">All products</a>
+      <a href="/cart">Your cart</a>
+    </nav>
+  </div>
+</footer>
+</body>
+</html>
+{{end}}

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Shown where a product has no photograph yet.
+
+  A placeholder rather than nothing, because a catalog of mixed products with and
+  without images reflows into a mess otherwise: every card keeps the same shape
+  whether or not somebody has got round to uploading a picture.
+
+  Deliberately dull. It should read as "no image yet", not as a design choice, so
+  that the absence is obvious to the operator looking at their own shop.
+
+  Replace it by putting your own placeholder.svg in STATIC_DIR.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 320" width="320" height="320"
+     role="img" aria-label="No image yet">
+  <rect width="320" height="320" fill="#f2f2f2"/>
+  <g fill="none" stroke="#c4c4c4" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="86" y="102" width="148" height="116" rx="8"/>
+    <circle cx="124" cy="140" r="12"/>
+    <path d="M96 200l40-38 30 28 26-22 40 34"/>
+  </g>
+</svg>

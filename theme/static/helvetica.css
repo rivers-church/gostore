@@ -1,0 +1,72 @@
+@font-face {
+font-family:"helvetica-neue-lt-pro";
+src: url("helveticaneue/helvetica-neue-300-italic.woff");
+font-display:auto;font-style:italic;font-weight:300;font-stretch:normal;
+}
+
+@font-face {
+font-family:"helvetica-neue-lt-pro";
+src: url("helveticaneue/helvetica-neue-700-italic.woff");
+font-display:auto;font-style:italic;font-weight:700;font-stretch:normal;
+}
+
+@font-face {
+font-family:"helvetica-neue-lt-pro";
+src: url("helveticaneue/helvetica-neue-100-italic.woff");
+font-display:auto;font-style:italic;font-weight:100;font-stretch:normal;
+}
+
+@font-face {
+font-family:"helvetica-neue-lt-pro";
+src: url("helveticaneue/helvetica-neue-300.woff");
+font-display:auto;font-style:normal;font-weight:300;font-stretch:normal;
+}
+
+@font-face {
+font-family:"helvetica-neue-lt-pro";
+src: url("/helvetica-neue-500.woff");
+font-display:auto;font-style:normal;font-weight:500;font-stretch:normal;
+}
+
+@font-face {
+font-family:"helvetica-neue-lt-pro";
+src: url("helveticaneue/helvetica-neue-400.woff");
+font-display:auto;font-style:normal;font-weight:400;font-stretch:normal;
+}
+
+@font-face {
+font-family:"helvetica-neue-lt-pro";
+src: url("helveticaneue/helvetica-neue-400-italic.woff");
+font-display:auto;font-style:italic;font-weight:400;font-stretch:normal;
+}
+
+@font-face {
+font-family:"helvetica-neue-lt-pro";
+src: url("helveticaneue/helvetica-neue-100.woff");
+font-display:auto;font-style:normal;font-weight:100;font-stretch:normal;
+}
+
+@font-face {
+font-family:"helvetica-neue-lt-pro";
+src: url("helveticaneue/helvetica-neue-500-italic.woff");
+font-display:auto;font-style:italic;font-weight:500;font-stretch:normal;
+}
+
+@font-face {
+font-family:"helvetica-neue-lt-pro";
+src: url("helveticaneue/helvetica-neue-200.woff");
+font-display:auto;font-style:normal;font-weight:200;font-stretch:normal;
+}
+
+
+@font-face {
+font-family:"helvetica-neue-lt-pro";
+src: url("helveticaneue/helvetica-neue-200-italic.woff");
+font-display:auto;font-style:italic;font-weight:200;font-stretch:normal;
+}
+
+@font-face {
+font-family:"helvetica-neue-lt-pro";
+src: url("helveticaneue/helvetica-neue-700.woff");
+font-display:auto;font-style:normal;font-weight:700;font-stretch:normal;
+}

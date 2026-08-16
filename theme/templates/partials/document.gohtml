@@ -1,0 +1,44 @@
+{{/*
+  The theme's <head>. It overrides partials/document.gohtml, so both layouts get it
+  and there is one copy of the two htmx settings rather than two.
+
+  Three changes from the default: the Rivers mark as the favicon, webflow.css after
+  styles.css, and no more than that. Everything else here is the default verbatim,
+  including the two htmx settings, which are load-bearing — see the comments.
+*/}}
+{{define "document_head"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{{/*
+  Through {{asset}} rather than a bare path: it resolves against STATIC_DIR, carries
+  the file's content hash so a replaced mark is a different URL, and is absolute —
+  a relative "static/R_White.png" resolves against /products/some-slug on a product
+  page and 404s there.
+*/}}
+<link rel="icon" href="{{asset "R_White.png"}}" type="image/png">
+<title>{{.Title}} — {{.StoreName}}</title>
+{{/*
+  Two settings, both load-bearing. Keep them if you edit this file.
+
+  includeIndicatorStyles:false — htmx injects a <style> block for the indicator
+  classes as soon as it loads, and style-src 'self' blocks it. Silently, apart from
+  a console warning, and it fails *open*: the rule that hides an hx-indicator never
+  applies, leaving a spinner permanently visible. So the injection is off and
+  styles.css carries those rules instead.
+
+  responseHandling — htmx's default is to swap 2xx and to swap *nothing* on 4xx or
+  5xx, which silently throws away every refusal this store sends: the cart answers
+  "That option is sold out." as a 409 carrying the fragment meant for the page.
+*/}}
+<meta name="htmx-config" content='{"includeIndicatorStyles":false,
+  "responseHandling":[{"code":"204","swap":false},
+                      {"code":"[23]..","swap":true},
+                      {"code":"[45]..","swap":true,"error":true}]}'>
+<link rel="stylesheet" href="{{asset "styles.css"}}">
+<link rel="stylesheet" href="{{asset "webflow.css"}}">
+{{with .FontCSSURL}}<link rel="stylesheet" href="{{.}}">{{end}}
+<script src="{{asset "htmx.min.js"}}" defer></script>
+</head>
+{{end}}

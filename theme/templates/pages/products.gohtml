@@ -1,0 +1,25 @@
+{{/*
+  The catalog, with the search moved into the header.
+
+  This file overrides two names in the catalog's own template set and leaves the
+  rest of pages/products.gohtml — products_filters, products_list, products_pager —
+  coming from the defaults, because an override replaces the definitions it names
+  and nothing else.
+
+    content    the page, without the filter form above the grid.
+    nav_extra  the same form, in the header's Search dropdown.
+
+  Defining nav_extra *here* is what keeps it off every other page: this file is
+  parsed into the catalog's set alone, so the block stays empty on the cart, the
+  checkout and the error pages — which is what the layout wants, since none of
+  their page data carries .Search or .Facets.
+*/}}
+{{define "content"}}
+<h1>All products</h1>
+
+<div id="products">
+  {{template "products_list" .}}
+</div>
+{{end}}
+
+{{define "nav_extra"}}{{template "products_filters" .}}{{end}}
