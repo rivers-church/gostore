@@ -51,8 +51,8 @@ used to sit here are what that rule is about: they were older defaults, and thei
 only live effect was to undo digital downloads in the confirmation email and demand
 a delivery address from a buyer of nothing but files.
 
-`static/` is the rest of the theme: `rivers.css`, `webflow.css`, the Helvetica Neue
-faces, and the Rivers marks.
+`static/` is the rest of the theme, and is now four files: `rivers.css`, `webflow.css`,
+and the two Rivers marks.
 
 ### Why there is no `styles.css` here
 
@@ -77,13 +77,37 @@ cost is that an override has to say what it wants — under a copy you delete a
 declaration, under a layer the base still applies and you must set the property back.
 Load order is load-bearing for the same reason, and getting it wrong fails quietly.
 
-Fonts do not work yet, and this is the one thing here that is broken rather than
-merely documented. `helvetica.css` is deliberately not linked: the faces are `.woff`,
-which is not in `static.go`'s `contentTypes`, and they sit in a `helveticaneue/`
-subdirectory, which the `STATIC_DIR` walk skips outright (`if e.IsDir() { continue }`).
-Both have to change — or the faces be converted to the `.woff2` that is already served
-and flattened out of the subdirectory — before `--font` names anything real. Until
-then the page falls back to `sans-serif`, which is what it already did.
+### Fonts come from Adobe Fonts, not from here
+
+Helvetica Neue is served by an Adobe Fonts kit, which is why there are no `.woff` files
+in this directory any more. There were: eleven faces and a `helvetica.css` that nothing
+linked, and that could not have worked if it had been — the faces were `.woff`, which is
+not in `static.go`'s `contentTypes`, and they sat in a subdirectory, which the
+`STATIC_DIR` walk skips (`if e.IsDir() { continue }`). Hosting them properly would have
+meant converting to `.woff2` and flattening the directory; the kit makes both moot.
+
+Three things have to agree, and only the first lives in this directory:
+
+| Where | What |
+|---|---|
+| `rivers.css` | `--font: helvetica-neue-lt-pro` — the kit's family name, which is what actually applies it |
+| `FONT_CSS_URL` | the kit's **CSS** embed, e.g. `https://use.typekit.net/abc1def.css` |
+| `FONT_ORIGINS` | `https://use.typekit.net,https://p.typekit.net` — two hosts, because the kit's stylesheet and the `.woff2` files it points at are served from different ones |
+
+Use the CSS embed from the Web Project panel, not the JavaScript one: the loader
+snippet needs `script-src` widened and a nonce for the inline `<script>` and `<style>`
+it injects, which this project does not support.
+
+The last two travel together. `FONT_CSS_URL` on an origin `FONT_ORIGINS` does not list
+is refused at boot, rather than blocked by the CSP in the browser where the only symptom
+is a console warning and a page in the fallback font. Setting neither is also fine — the
+page falls back to `sans-serif` and nothing else changes.
+
+The cost, stated plainly because it is the one this project otherwise refuses to pay:
+the kit puts a third-party origin on every page, the checkout included, and widens
+`style-src` and `font-src` past `'self'` to do it. A self-hosted `.woff2` would keep the
+CSP shut and the payment path free of anyone else's server. This is a deliberate trade
+of that for the licence and the convenience, not an oversight.
 
 Two token choices flatten distinctions the bundled sheet draws, which is a design call
 rather than a defect: `--ink-soft` is set to the same value as `--ink`, so every `.hint`

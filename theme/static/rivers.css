@@ -26,7 +26,13 @@
   --accent: #0c0c0c;
   --black: #0c0c0c;
 
-  --font: helvetica-neue-lt-pro;
+  /* The family name is the Adobe Fonts kit's, and has to match it exactly — a kit
+     licensing plain "Helvetica Neue" calls it helvetica-neue, not this. Getting it
+     wrong is silent: the page renders in the fallback with nothing in the console to
+     say the name was never found. The fallback is named here rather than left to the
+     browser's default, so a kit that fails to load still gets a sans-serif page.
+     FONT_CSS_URL and FONT_ORIGINS are what fetch it — see theme/README. */
+  --font: helvetica-neue-lt-pro, sans-serif;
 
   --radius: 0.75rem;
   --radius-lg: 1rem;

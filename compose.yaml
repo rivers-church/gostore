@@ -155,6 +155,13 @@ services:
       TEMPLATE_DIR: /theme/templates
       STATIC_DIR: /theme/static
       THEME_RELOAD: ${THEME_RELOAD:-true}
+      # Fonts. Empty by default, so a clean checkout still boots and renders in
+      # the system stack; the Rivers theme sets both in .env to reach its Adobe
+      # Fonts kit. They travel together on purpose — FONT_CSS_URL on an origin
+      # FONT_ORIGINS does not list is refused at boot rather than silently blocked
+      # by the CSP in the browser.
+      FONT_ORIGINS: ${FONT_ORIGINS:-}
+      FONT_CSS_URL: ${FONT_CSS_URL:-}
     volumes:
       # Read-only: the store renders a theme, it never writes one.
       - ./theme:/theme:ro

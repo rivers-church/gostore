@@ -2,19 +2,19 @@
   The theme's <head>. It overrides partials/document.gohtml, so both layouts get it
   and there is one copy of the two htmx settings rather than two.
 
-  Two changes from the default: the Rivers mark as the favicon, and three stylesheets
+  Two changes from the default: the Rivers mark as the favicon, and two stylesheets
   linked after the bundled one. Everything else here is the default verbatim, including
-  the two htmx settings, which are load-bearing — see the comments.
+  the two htmx settings and the font link, which are load-bearing — see the comments.
 
   The stylesheet order is the theme. styles.css is the bundled sheet, unshadowed, so it
   keeps receiving upstream fixes; rivers.css is the whole of what Rivers changes and has
   to come after it to win. Reordering these two links breaks the theme silently — the
   page still renders, in the default's colours.
 
-  helvetica.css is deliberately *not* linked. It cannot work as the files stand: the
-  faces are .woff, which is not in static.go's contentTypes, and they sit in a
-  helveticaneue/ subdirectory, which the STATIC_DIR walk skips outright. Linking it
-  would buy eleven 404s and the same fallback the page already gets. See theme/README.
+  Helvetica Neue comes from the Adobe Fonts kit that FONT_CSS_URL names, linked below,
+  and not from this directory: the faces are the kit's to serve. Nothing here needs to
+  change to switch kits — rivers.css names the family in --font, the environment names
+  the stylesheet, and the two are checked against each other at boot.
 */}}
 {{define "document_head"}}<!doctype html>
 <html lang="en">
