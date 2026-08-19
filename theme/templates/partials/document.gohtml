@@ -2,9 +2,19 @@
   The theme's <head>. It overrides partials/document.gohtml, so both layouts get it
   and there is one copy of the two htmx settings rather than two.
 
-  Three changes from the default: the Rivers mark as the favicon, webflow.css after
-  styles.css, and no more than that. Everything else here is the default verbatim,
-  including the two htmx settings, which are load-bearing — see the comments.
+  Two changes from the default: the Rivers mark as the favicon, and three stylesheets
+  linked after the bundled one. Everything else here is the default verbatim, including
+  the two htmx settings, which are load-bearing — see the comments.
+
+  The stylesheet order is the theme. styles.css is the bundled sheet, unshadowed, so it
+  keeps receiving upstream fixes; rivers.css is the whole of what Rivers changes and has
+  to come after it to win. Reordering these two links breaks the theme silently — the
+  page still renders, in the default's colours.
+
+  helvetica.css is deliberately *not* linked. It cannot work as the files stand: the
+  faces are .woff, which is not in static.go's contentTypes, and they sit in a
+  helveticaneue/ subdirectory, which the STATIC_DIR walk skips outright. Linking it
+  would buy eleven 404s and the same fallback the page already gets. See theme/README.
 */}}
 {{define "document_head"}}<!doctype html>
 <html lang="en">
@@ -25,8 +35,9 @@
   includeIndicatorStyles:false — htmx injects a <style> block for the indicator
   classes as soon as it loads, and style-src 'self' blocks it. Silently, apart from
   a console warning, and it fails *open*: the rule that hides an hx-indicator never
-  applies, leaving a spinner permanently visible. So the injection is off and
-  styles.css carries those rules instead.
+  applies, leaving a spinner permanently visible. So the injection is off and the
+  bundled styles.css carries those rules instead — which is one reason this theme links
+  that sheet rather than replacing it.
 
   responseHandling — htmx's default is to swap 2xx and to swap *nothing* on 4xx or
   5xx, which silently throws away every refusal this store sends: the cart answers
@@ -37,6 +48,7 @@
                       {"code":"[23]..","swap":true},
                       {"code":"[45]..","swap":true,"error":true}]}'>
 <link rel="stylesheet" href="{{asset "styles.css"}}">
+<link rel="stylesheet" href="{{asset "rivers.css"}}">
 <link rel="stylesheet" href="{{asset "webflow.css"}}">
 {{with .FontCSSURL}}<link rel="stylesheet" href="{{.}}">{{end}}
 <script src="{{asset "htmx.min.js"}}" defer></script>

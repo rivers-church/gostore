@@ -1,0 +1,273 @@
+/*
+ * The Rivers theme, as a layer over the bundled stylesheet rather than a copy of it.
+ *
+ * document.gohtml links styles.css first and this file after it, so everything here
+ * wins on the cascade without the theme owning a second copy of the 545 lines it never
+ * meant to change. The bundled sheet goes on receiving upstream fixes; a release that
+ * corrects a rule this file does not mention corrects it here too.
+ *
+ * The cost of the layer, which is real: an override has to *say* what it wants. Under a
+ * copy you delete a declaration and it is gone; here the base rule still applies and
+ * the override must set the property back — see the header hover below, which needs an
+ * explicit `text-decoration: none` where the copy simply commented the line out. Load
+ * order carries the same weight: move this link above styles.css and most of the file
+ * stops applying, silently. In exchange the theme is auditable — what follows is the
+ * whole of what Rivers changes, and nothing here is an accident of a stale copy.
+ */
+
+/* --- Tokens --------------------------------------------------------------- */
+
+/* Only the values that differ. Everything else — the spacing scale, the type sizes,
+   --measure, --page, --warn — is the bundled default on purpose. */
+:root {
+  --paper: whitesmoke;
+  --ink: #0c0c0c;
+  --ink-soft: #0c0c0c;
+  --accent: #0c0c0c;
+  --black: #0c0c0c;
+
+  --font: helvetica-neue-lt-pro;
+
+  --radius: 0.75rem;
+  --radius-lg: 1rem;
+}
+
+/* --- Header --------------------------------------------------------------- */
+
+/* Weight rather than a rule under the word. The base sets an underline and an offset,
+   so both have to be turned off here by name: this is the layer's cost in one rule. */
+.site-header nav a:hover {
+  text-decoration: none;
+  text-underline-offset: initial;
+  -webkit-text-stroke-width: 0.5px;
+}
+
+.site-header {
+  background-color: white;
+}
+
+/*Caleb's CSS things starting here*/
+
+.btn {
+    background-color: #0c0c0c;
+    margin-top: 50px;
+    font-size: 1em;
+    font-weight: 500;
+    border-width: 1px;
+    border-style: solid;
+    border-color: rgb(0, 0, 0);
+    border-image: none;
+    border-radius: 0.75rem;
+    padding: 10px 15px;
+    transition: background-color 0.2s;
+}
+
+.btn:hover {
+    background-color: #f0f0f0;
+    color: #333;
+}
+
+.btn_small {
+    box-sizing: border-box;
+    background-color: #0c0c0c;
+    margin-top: 0px;
+    font-size: 1rem;
+    font-weight: 500;
+    line-height: 1em;
+    display: block;
+    border-width: 1px;
+    border-style: solid;
+    border-color: rgb(0, 0, 0);
+    border-image: none;
+    border-radius: 0.75rem;
+    padding: 10px 15px;
+    transition: background-color 0.2s;
+    color: white;
+}
+
+.btn_small:hover {
+    background-color: var(--paper);
+    color: #0c0c0c;
+}
+
+.btn_dark {
+    background-color: whitesmoke;
+    color: #0c0c0c;
+    justify-content: flex-start;
+    align-items: center;
+    margin-top: 0px;
+    font-weight: 500;
+    display: flex;
+    position: relative;
+    border: 1px solid #0c0c0c;
+    border-radius: 0.75rem;
+    transition: background-color 0.2s ease-out;
+    padding: 10px 15px;
+}
+
+.btn_dark:hover {
+    background-color: #0c0c0c;
+    color: #fff;
+}
+
+.btn_light {
+    background-color: whitesmoke;
+    margin-top: 10px;
+    border: black 1px solid;
+    color: black;
+    transition: background-color ease 0.3s;
+    padding: 10px 15px;
+    margin-top: 0px;
+}
+
+.btn_light:hover {
+    background-color: black;
+    border: black 1px solid;
+    color: white;
+}
+
+.site-header .inner{
+    text-align: center;
+    justify-content: space-between;
+    align-items: center;
+    width: 60%;
+    min-width: 720px;
+    max-width: 1000px;
+    height: 60px;
+    display: flex;
+    position: relative;
+    padding: 0;
+}
+
+.brand{
+    width: 20%;
+}
+
+.brand img{
+    width: 60%;
+    height: auto;
+   width: 100px;
+}
+
+.product-card {
+  border: 1px solid var(--ink);
+  border-radius: var(--radius);
+  padding: 10px;
+
+}
+
+  .product-card a {
+    & .frame {
+        > img {
+          object-fit: contain;
+
+        }
+        aspect-ratio: 1/1;
+        width: 100%;
+        height: auto;
+
+
+    }
+    display: flex;
+    flex-direction: column;
+
+    height: 100%;
+    justify-content: space-between;
+  }
+
+
+  body{
+    font-family: helvetica-neue-lt-pro, sans-serif;
+
+    p{
+      font-size: 1em;
+    }
+
+    h1{
+      font-size: 2em;
+    }
+
+    h2{
+      font-size: 1.8em;
+    }
+
+    h3{
+      font-size: 1.6em;
+    }
+  }
+
+  form.filters{
+    margin-bottom: var(--gap-md);
+  }
+
+  form.filters fieldset{
+    border-radius: var(--radius);
+  }
+
+  form.filters div.search{
+    display: flex;
+    flex-direction: row;
+  }
+
+  /*DropDown for Content*/
+  .dropdown{
+    display: block;
+    position: relative;
+  }
+
+  .dropdown_content{
+    display: none;
+    position: absolute;
+    background-color: white;
+    border-radius: var(--radius);
+    padding: var(--gap-md);
+    transform: translate(0px -50%);
+    right: 0%;
+  }
+
+  .dropdown:hover .dropdown_content{
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .site-header{
+    & nav{
+      .btn_small {
+        color: white;
+      }
+    }
+  }
+
+  .products {
+    margin-bottom: var(--gap-md);
+  }
+
+  .dropdown_content.search{
+    width: 40vw;
+
+    form.filters div.search {
+      display: flex;
+      flex-direction: row;
+      gap: 20px;
+      justify-content: space-around;
+      margin-bottom: 10px;
+    }
+
+    form.filters div{
+      margin-bottom: 0px;
+    }
+
+    form div input {
+      width: 100%;
+    }
+
+    form{
+      margin-bottom: 0px;
+    }
+  }
+
+  .buttons{
+    display: flex;
+    flex-direction: column;
+  }
