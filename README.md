@@ -5,8 +5,8 @@ htmx frontend, PostgreSQL for storage, and [PayFast](https://payfast.io) for pay
 Stdlib-first, with a deliberately tiny dependency surface.
 
 > **Status: early.** The skeleton (config, migrations, container stack, health check), the
-> catalog (products, variants, seed command, admin CRUD), admin authentication, the
-> storefront, the cart, checkout against PayFast, order emails, the admin's order views,
+> catalog (products, variants, seed command, admin CRUD), administrator accounts with roles,
+> the storefront, the cart, checkout against PayFast, order emails, the admin's order views,
 > product image uploads, the hardening pass, categories, and catalog search with filtering
 > and pagination all work. What remains is the publishing checklist — see the build order
 > below.
@@ -194,13 +194,84 @@ Notes:
   complete, with the outage reported as an authentication problem.
 - htmx requests that have lost their session get `401` and `HX-Refresh: true` instead of a
   redirect, because swapping a login page into a fragment produces a broken hybrid.
-- Login and the setup claim are rate limited to 10 attempts a minute per IP; see
-  [Hardening](#hardening). The claim is limited because it verifies a secret, exactly as the
-  login does.
-- Roles (`owner`, `admin`, `manager`, `viewer`) and per-account `must_change_password` are in
-  the schema and in `internal/auth`, but **nothing enforces them yet** — every signed-in
-  account can currently reach every admin page. Authorization and the account-management
-  pages are the next two phases of the build order below.
+- Login, the setup claim and the change-your-own-password form share one rate limit of 10
+  attempts a minute per IP; see [Hardening](#hardening). All three verify a secret, and each
+  one spends 64 MiB on argon2 doing it.
+- What each account may actually *do* is [Roles](#roles), below.
+
+## Roles
+
+Four roles, following Stripe's dashboard split reduced to the surface this store has. Read
+access to the catalog and the orders comes with having a session at all, so the table is
+really about who may write:
+
+| Role | Catalog | Orders & entitlements | Accounts | |
+|---|---|---|---|---|
+| `owner` | write | write | write | Cannot be disabled or demoted while it is the last enabled owner |
+| `admin` | write | write | write | |
+| `manager` | write | write | — | The shop-runner role |
+| `viewer` | read | read | — | Looks, changes nothing |
+
+`owner` and `admin` are identical in capability. `owner` exists to be the account the
+last-account guard protects, which makes "who can never be locked out" a visible fact about
+a row rather than something that emerges from counting.
+
+**Permissions are a static map in Go** — `auth.Role` to a set of `auth.Permission` — not a
+table. A permissions table would put a join on every request to buy configurability nobody
+asked for, and would let a deployment invent a role the code has never heard of.
+
+**Every route names the permission it needs on the line that registers it**, so
+authorization travels with the route the way authentication already does:
+
+```go
+admin("GET  /admin/products", auth.PermRead,         h.adminProductList)
+admin("POST /admin/products", auth.PermCatalogWrite, h.adminProductCreate)
+admin("POST /admin/users",    auth.PermUsersWrite,   h.adminUserCreate)
+```
+
+The registration records the pair, so `AdminProtectedRoutes()` is what the tests sweep
+rather than a list maintained beside the real one. Templates ask `.Can "catalog.write"` and
+leave out what a role could not use — a button that is merely absent is not a restriction on
+anybody who types the address, so that is presentation and `requirePerm` is the enforcement.
+
+### Managing accounts
+
+`/admin/users` is `users.write` only. What it will not do is as much of the design as what
+it will:
+
+- **Accounts are disabled, never deleted.** A removed row erases who did what, and the
+  products and orders an administrator touched outlive their employment. Disabling ends
+  their sessions in the same transaction.
+- **Nobody may change their own role, disable themselves, or reset their own password from
+  these pages.** A reset skips the current-password check, so allowing it against yourself
+  would make an unattended screen enough to take an account over for good; an administrator
+  who can change their own role is not held by it. All three answer `409`, and the controls
+  are absent rather than present-and-refusing.
+- **The last owner who can still sign in cannot be disabled or demoted**, from either
+  direction — both guards take the same advisory lock, because otherwise two administrators
+  removing two different owners each pass a count nobody re-reads.
+- **A password somebody else chose is temporary.** Creating an account, or resetting its
+  password, sets `must_change_password`; every route except the change form itself then
+  bounces there until a new one is chosen.
+- **Changing your own password asks for the current one.** A CSRF token proves the request
+  came from our form, not that the person at the keyboard owns the account. It ends every
+  session including the one doing it, and lands on the login form.
+
+### A first run, end to end
+
+```sh
+make up
+docker compose logs server | grep setup_token
+```
+
+1. Open `/admin` — with no account it redirects to `/admin/setup`.
+2. Paste the token, choose an address and a password: that account is the `owner`.
+3. `/admin/users/new` creates the rest. Give each one the least role that covers their job;
+   `manager` is the usual answer for somebody running the shop.
+4. Hand over the starting password however you like. They will be asked to replace it before
+   any other admin page opens.
+5. When somebody leaves, disable them. Their sessions stop on their next request, and the
+   record of what they did stays.
 
 ## CSRF
 
@@ -285,7 +356,9 @@ $argon2id$v=19$m=65536,t=3,p=4$<salt>$<hash>
 ```
 
 Because the parameters live in the hash, raising them later needs no migration: existing
-hashes keep verifying at their own settings and the next `make hashpw` writes the new ones.
+hashes keep verifying at their own settings, and the next password set through the admin —
+or through `make hashpw`, which is now only the lockout-recovery path — is written with the
+new ones.
 
 **A bcrypt hash still verifies.** `CheckPassword` dispatches on the prefix, so a hash
 carried over from an older deployment keeps working and moves to argon2id the next time that
@@ -1611,8 +1684,8 @@ unchanged when a migration needs to be inspected or applied by hand.
 11. **Search and filtering** — full-text plus trigram, category filters, pagination, images ← *done*
 11.5. **Administrator accounts** — `admin_users`, roles, the last-owner guards ← *done*
 11.6. **Sessions and setup** — `admin_sessions`, the `/admin/setup` claim, no credential in the environment ← *done*
-11.7. **Authorization** — a permission named on every route registration, `must_change_password`
-11.8. **Account management** — `/admin/users`, own-password change
+11.7. **Authorization** — a permission named on every route registration, `must_change_password` ← *done*
+11.8. **Account management** — `/admin/users`, own-password change ← *done*
 12. Publish
 
 ## Licence
