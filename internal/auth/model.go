@@ -2,6 +2,7 @@ package auth
 
 import (
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -38,12 +39,7 @@ var Roles = []Role{RoleOwner, RoleAdmin, RoleManager, RoleViewer}
 // the same thing, but a form should answer with a message on the field rather
 // than a constraint violation turned into a 500.
 func (r Role) Valid() bool {
-	for _, known := range Roles {
-		if r == known {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(Roles, r)
 }
 
 // Label is the role's name for a human, since the stored value is lower case and
