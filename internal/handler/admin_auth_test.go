@@ -10,46 +10,6 @@ import (
 	"github.com/17xande-dev/gostore/internal/auth"
 )
 
-func TestAdminAuth_RedirectsUnauthenticated(t *testing.T) {
-	s := newStore(t)
-
-	// Every protected route, not a sample of them: an unprotected route is the
-	// kind of mistake that only shows up when someone finds it.
-	//
-	// Phase 3 replaces this hand-maintained list with one derived from the route
-	// registration itself, so a new route cannot be added without appearing here.
-	paths := []struct {
-		method, path string
-	}{
-		{http.MethodGet, "/admin/"},
-		{http.MethodGet, "/admin/products"},
-		{http.MethodGet, "/admin/products/new"},
-		{http.MethodPost, "/admin/products"},
-		{http.MethodGet, "/admin/products/3f2504e0-4f89-41d3-9a0c-0305e82c3301/edit"},
-		{http.MethodPost, "/admin/products/3f2504e0-4f89-41d3-9a0c-0305e82c3301"},
-		{http.MethodPost, "/admin/products/3f2504e0-4f89-41d3-9a0c-0305e82c3301/delete"},
-		{http.MethodPost, "/admin/products/3f2504e0-4f89-41d3-9a0c-0305e82c3301/variants"},
-		{http.MethodPost, "/admin/products/3f2504e0-4f89-41d3-9a0c-0305e82c3301/variants/9f2504e0-4f89-41d3-9a0c-0305e82c3301"},
-		{http.MethodPost, "/admin/products/3f2504e0-4f89-41d3-9a0c-0305e82c3301/variants/9f2504e0-4f89-41d3-9a0c-0305e82c3301/delete"},
-	}
-
-	for _, tc := range paths {
-		var res *http.Response
-		if tc.method == http.MethodGet {
-			res, _ = get(t, s.srv, tc.path)
-		} else {
-			res, _ = post(t, s.srv, tc.path, url.Values{"title": {"Sneaky"}})
-		}
-		if res.StatusCode != http.StatusSeeOther {
-			t.Errorf("%s %s = %d, want 303", tc.method, tc.path, res.StatusCode)
-			continue
-		}
-		if got := res.Header.Get("Location"); !strings.HasPrefix(got, "/admin/login") {
-			t.Errorf("%s %s redirected to %q, want the login form", tc.method, tc.path, got)
-		}
-	}
-}
-
 func TestAdminAuth_SignsInWithEmailAndPassword(t *testing.T) {
 	s := newStore(t)
 	owner := s.owner

@@ -47,6 +47,11 @@ type Handler struct {
 	// store for the lookup it does on every protected request.
 	users *auth.Store
 
+	// adminRoutes is every protected route and the permission it names, recorded
+	// by RegisterAdmin as it wires them. Written once at startup, read-only
+	// afterwards, so it needs no lock.
+	adminRoutes []AdminRoute
+
 	// limits are built here from cfg rather than passed in, so that a rate limit is
 	// applied on the line that registers the route it protects — the same reasoning
 	// as RequireAdmin. A limiter wrapped around a prefix by the caller is one
@@ -212,12 +217,15 @@ func (h *Handler) csrfFailed(w http.ResponseWriter, r *http.Request) {
 }
 
 // RegisterAdmin wires the admin routes: the login form and the sign-out
-// endpoint reachable by anyone, everything else behind protect.
+// endpoint reachable by anyone, everything else behind protect and the
+// permission it names.
 //
 // Protection is applied here, route by route, rather than by the caller. A
 // middleware wrapped around a prefix somewhere else is one refactor away from
 // silently no longer covering a new route; a handler registered without protect
-// in this list is visible on the line that registers it.
+// in this list is visible on the line that registers it. Authorisation rides
+// along the same way: the permission is an argument to the registration, so
+// there is no second place where a route and its role could disagree.
 func (h *Handler) RegisterAdmin(mux *http.ServeMux, protect middleware.Middleware) {
 	mux.HandleFunc("GET /admin/login", h.adminLoginForm)
 	// Rate limited, and only the POST: the form itself is harmless, and limiting a
@@ -232,43 +240,60 @@ func (h *Handler) RegisterAdmin(mux *http.ServeMux, protect middleware.Middlewar
 	mux.HandleFunc("GET /admin/setup", h.adminSetupForm)
 	mux.Handle("POST /admin/setup", h.limits.login(http.HandlerFunc(h.adminSetupClaim)))
 
-	admin := func(pattern string, handler http.HandlerFunc) {
-		mux.Handle(pattern, protect(handler))
+	// Registering twice would otherwise record every route twice; the mux would
+	// panic first, but a handler mounted on two muxes in a test would not.
+	h.adminRoutes = nil
+
+	// admin registers a route behind a session and the permission it needs, and
+	// records the pair. The permission is a required argument rather than
+	// something a route can leave out: a new route has to say what it is for, and
+	// auth.PermRead is how it says "any signed-in administrator".
+	admin := func(pattern string, perm auth.Permission, handler http.HandlerFunc) {
+		method, path, ok := strings.Cut(pattern, " ")
+		if !ok {
+			panic("admin route pattern must be \"METHOD /path\": " + pattern)
+		}
+		h.adminRoutes = append(h.adminRoutes, AdminRoute{Method: method, Pattern: path, Perm: perm})
+		mux.Handle(pattern, protect(h.requirePerm(perm, handler)))
 	}
-	admin("GET /admin/{$}", func(w http.ResponseWriter, r *http.Request) {
+	admin("GET /admin/{$}", auth.PermRead, func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/admin/products", http.StatusSeeOther)
 	})
-	admin("GET /admin/products", h.adminProductList)
-	admin("GET /admin/products/new", h.adminProductNew)
-	admin("POST /admin/products", h.adminProductCreate)
-	admin("GET /admin/products/{id}/edit", h.adminProductEdit)
-	admin("GET /admin/products/{id}/downloads", h.adminProductDownloads)
-	admin("POST /admin/products/{id}/files", h.adminProductFileUpload)
-	admin("POST /admin/products/{id}/files/{fileID}", h.adminProductFileUpdate)
-	admin("POST /admin/products/{id}/files/{fileID}/delete", h.adminProductFileDelete)
-	admin("POST /admin/products/{id}", h.adminProductUpdate)
-	admin("POST /admin/products/{id}/delete", h.adminProductDelete)
-	admin("POST /admin/products/{id}/variants", h.adminVariantCreate)
-	admin("POST /admin/products/{id}/variants/{variantID}", h.adminVariantUpdate)
-	admin("POST /admin/products/{id}/variants/{variantID}/delete", h.adminVariantDelete)
-	admin("POST /admin/products/{id}/image", h.adminProductImageUpload)
-	admin("POST /admin/products/{id}/image/delete", h.adminProductImageDelete)
+	admin("GET /admin/products", auth.PermRead, h.adminProductList)
+	// The new-product form is catalog.write rather than read: it is not a view of
+	// anything, it exists only to create, and offering it to a role that cannot
+	// submit it would be a page whose one button is a 403. The edit page stays
+	// read, because it is also where a viewer sees what a product is.
+	admin("GET /admin/products/new", auth.PermCatalogWrite, h.adminProductNew)
+	admin("POST /admin/products", auth.PermCatalogWrite, h.adminProductCreate)
+	admin("GET /admin/products/{id}/edit", auth.PermRead, h.adminProductEdit)
+	admin("GET /admin/products/{id}/downloads", auth.PermRead, h.adminProductDownloads)
+	admin("POST /admin/products/{id}/files", auth.PermCatalogWrite, h.adminProductFileUpload)
+	admin("POST /admin/products/{id}/files/{fileID}", auth.PermCatalogWrite, h.adminProductFileUpdate)
+	admin("POST /admin/products/{id}/files/{fileID}/delete", auth.PermCatalogWrite, h.adminProductFileDelete)
+	admin("POST /admin/products/{id}", auth.PermCatalogWrite, h.adminProductUpdate)
+	admin("POST /admin/products/{id}/delete", auth.PermCatalogWrite, h.adminProductDelete)
+	admin("POST /admin/products/{id}/variants", auth.PermCatalogWrite, h.adminVariantCreate)
+	admin("POST /admin/products/{id}/variants/{variantID}", auth.PermCatalogWrite, h.adminVariantUpdate)
+	admin("POST /admin/products/{id}/variants/{variantID}/delete", auth.PermCatalogWrite, h.adminVariantDelete)
+	admin("POST /admin/products/{id}/image", auth.PermCatalogWrite, h.adminProductImageUpload)
+	admin("POST /admin/products/{id}/image/delete", auth.PermCatalogWrite, h.adminProductImageDelete)
 	// Categories. Deleting one unlinks it from its products and never deletes them
 	// — see internal/handler/admin_categories.go.
-	admin("GET /admin/categories", h.adminCategoryList)
-	admin("GET /admin/categories/new", h.adminCategoryNew)
-	admin("POST /admin/categories", h.adminCategoryCreate)
-	admin("GET /admin/categories/{id}/edit", h.adminCategoryEdit)
-	admin("POST /admin/categories/{id}", h.adminCategoryUpdate)
-	admin("POST /admin/categories/{id}/delete", h.adminCategoryDelete)
+	admin("GET /admin/categories", auth.PermRead, h.adminCategoryList)
+	admin("GET /admin/categories/new", auth.PermCatalogWrite, h.adminCategoryNew)
+	admin("POST /admin/categories", auth.PermCatalogWrite, h.adminCategoryCreate)
+	admin("GET /admin/categories/{id}/edit", auth.PermRead, h.adminCategoryEdit)
+	admin("POST /admin/categories/{id}", auth.PermCatalogWrite, h.adminCategoryUpdate)
+	admin("POST /admin/categories/{id}/delete", auth.PermCatalogWrite, h.adminCategoryDelete)
 	// Read-only on purpose: only an authenticated gateway notification may change
 	// an order. See internal/handler/admin_orders.go.
-	admin("GET /admin/orders", h.adminOrderList)
-	admin("GET /admin/orders/{id}", h.adminOrderShow)
+	admin("GET /admin/orders", auth.PermRead, h.adminOrderList)
+	admin("GET /admin/orders/{id}", auth.PermRead, h.adminOrderShow)
 	// The only mutating routes under /admin/orders. See adminEntitlementRevoke for
 	// why they do not break the read-only rule the order pages otherwise keep.
-	admin("POST /admin/orders/{id}/entitlements/{entitlementID}/revoke", h.adminEntitlementRevoke)
-	admin("POST /admin/orders/{id}/entitlements/{entitlementID}/restore", h.adminEntitlementRestore)
+	admin("POST /admin/orders/{id}/entitlements/{entitlementID}/revoke", auth.PermOrdersWrite, h.adminEntitlementRevoke)
+	admin("POST /admin/orders/{id}/entitlements/{entitlementID}/restore", auth.PermOrdersWrite, h.adminEntitlementRestore)
 }
 
 // page is what every rendered page needs regardless of what it shows. It is
@@ -290,9 +315,32 @@ type page struct {
 	// bundled theme uses the system font stack. Its origin is in the CSP's style-src
 	// by the time it reaches here — config refuses to boot otherwise.
 	FontCSSURL string
+
+	// User is the signed-in administrator, and the zero User on every public page.
+	// Templates ask Can rather than reading Role, so the answer comes from the
+	// same map the routes are gated by.
+	User auth.User
+}
+
+// Can reports whether the signed-in administrator holds a permission, so a
+// template can leave out what their role could not do anyway.
+//
+// Presentation only. requirePerm is what actually refuses the request, and a
+// page that hid a form from somebody who could still post to it would be a
+// restriction on nothing but the mouse.
+//
+// An unknown permission is an error rather than a false, which is the whole
+// reason for the second return: a mistyped name in a template would otherwise
+// hide a button from everybody, for good, and look like a design decision.
+func (p page) Can(perm string) (bool, error) {
+	if !auth.Permission(perm).Valid() {
+		return false, fmt.Errorf("page.Can: %q is not a permission", perm)
+	}
+	return p.User.Can(auth.Permission(perm)), nil
 }
 
 func (h *Handler) newPage(r *http.Request, title string) page {
+	user, _ := middleware.AdminUser(r)
 	return page{
 		Title:     title,
 		StoreName: h.cfg.StoreName,
@@ -301,6 +349,9 @@ func (h *Handler) newPage(r *http.Request, title string) page {
 		BaseURL:   h.cfg.BaseURL,
 
 		FontCSSURL: h.cfg.FontCSSURL,
+		// Absent on every page outside RequireAdmin, which is the zero User: it
+		// holds no permissions, so a public template asking Can gets false.
+		User: user,
 	}
 }
 

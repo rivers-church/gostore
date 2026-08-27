@@ -80,6 +80,16 @@ const (
 	PermUsersWrite Permission = "users.write"
 )
 
+// Permissions is every permission there is, so that a caller handed one as a
+// string — a template asking Can, say — can tell a typo from a real name
+// instead of quietly getting "no".
+var Permissions = []Permission{PermRead, PermCatalogWrite, PermOrdersWrite, PermUsersWrite}
+
+// Valid reports whether p is one of them.
+func (p Permission) Valid() bool {
+	return slices.Contains(Permissions, p)
+}
+
 // permissions is the whole authorisation model: a static map, not a table.
 //
 // A permissions table would put a join on every request to buy configurability

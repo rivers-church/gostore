@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -79,6 +80,11 @@ type shop struct {
 	// pool is the database behind all of the above, for the tests that need to
 	// take it away — an outage is a response an admin page has to get right.
 	pool *pgxpool.Pool
+
+	// handler is the one the server is mounted on, for the tests that ask it what
+	// it registered — the route sweep and the role matrix both work from
+	// AdminProtectedRoutes rather than from a list of their own.
+	handler *Handler
 
 	// users is the administrator accounts. Tests reach for it to create a second
 	// administrator, to revoke a session, or to assert on what a handler did to an
@@ -183,7 +189,7 @@ func newUnclaimedStore(t *testing.T, edit ...func(*config.Config)) *shop {
 	srv.Client().CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	t.Cleanup(srv.Close)
 	return &shop{
-		srv: srv, catalog: store, orders: orderStore, gateway: gateway,
+		srv: srv, handler: h, catalog: store, orders: orderStore, gateway: gateway,
 		mail: mail, images: images, files: files, grants: grants,
 		users: users, pool: pool,
 	}
@@ -680,17 +686,12 @@ func get(t *testing.T, srv *httptest.Server, path string) (*http.Response, strin
 func post(t *testing.T, srv *httptest.Server, path string, form url.Values) (*http.Response, string) {
 	t.Helper()
 
-	if form == nil {
-		form = url.Values{}
-	}
-	if _, set := form["csrf_token"]; !set {
-		form.Set("csrf_token", csrfToken(t, srv))
-	}
-
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+path, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+path,
+		strings.NewReader(withToken(t, srv, form).Encode()))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
+
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	// nosurf checks the request's origin as well as its token, via
 	// Sec-Fetch-Site, Origin or Referer — a browser sends all three on a
@@ -708,10 +709,7 @@ func newRequest(t *testing.T, srv *httptest.Server, method, path string, form ur
 
 	var body io.Reader
 	if form != nil {
-		if _, set := form["csrf_token"]; !set {
-			form.Set("csrf_token", csrfToken(t, srv))
-		}
-		body = strings.NewReader(form.Encode())
+		body = strings.NewReader(withToken(t, srv, form).Encode())
 	}
 	req, err := http.NewRequestWithContext(t.Context(), method, srv.URL+path, body)
 	if err != nil {
@@ -726,21 +724,42 @@ func newRequest(t *testing.T, srv *httptest.Server, method, path string, form ur
 	return req
 }
 
+// withToken returns form with a CSRF token in it, as a copy.
+//
+// A copy because the caller's map may be shared — a table of cases reused
+// across subtests is the ordinary way to write these — and writing the token
+// into it would pin the first server's token to every later request. That
+// failure looks exactly like a refused request, which is what several of these
+// tests assert, so it passes while proving nothing.
+func withToken(t *testing.T, srv *httptest.Server, form url.Values) url.Values {
+	t.Helper()
+
+	out := url.Values{}
+	for k, v := range form {
+		out[k] = slices.Clone(v)
+	}
+	if _, set := out["csrf_token"]; !set {
+		out.Set("csrf_token", csrfToken(t, srv))
+	}
+	return out
+}
+
 // csrfToken reads a token out of a rendered form. nosurf validates the
 // submitted token against the client's cookie, so any token issued to this jar
 // works for any later request from it.
 //
 // Which page depends on the store's state: the login form redirects away once
-// the client is signed in and once nobody has claimed the store yet, the setup
-// page exists only in that second case, and the new-product form is unreachable
-// until signed in. Between the three one always renders.
+// the client is signed in and once nobody has claimed the store yet, and the
+// setup page exists only in that second case. The product list is the third,
+// for a signed-in client — it carries the layout's sign-out form, so it has a
+// token for every role, including the ones that may not open a create form.
 func csrfToken(t *testing.T, srv *httptest.Server) string {
 	t.Helper()
 
 	res, body := get(t, srv, "/admin/login")
 	if res.StatusCode != http.StatusOK {
 		if res, body = get(t, srv, "/admin/setup"); res.StatusCode != http.StatusOK {
-			_, body = get(t, srv, "/admin/products/new")
+			_, body = get(t, srv, "/admin/products")
 		}
 	}
 
