@@ -35,6 +35,15 @@ var ErrEmailTaken = errors.New("auth: an administrator with that email already e
 // admin area nobody can sign in to, repairable only with database access.
 var ErrLastOwner = errors.New("auth: this is the last enabled owner")
 
+// ownerGuardLockID is the key for the transaction advisory lock that serialises
+// the last-owner guards. Arbitrary but fixed, and deliberately distinct from
+// db.go's migration lock, which is the other advisory lock in this codebase —
+// two unrelated operations sharing a key would block each other for no reason.
+//
+// See LockOwnerGuard in internal/db/queries/auth.sql for why the guards' own
+// count subquery is not sufficient without it.
+const ownerGuardLockID int64 = 8_675_309_002
+
 // dummyHash makes a sign-in for an address with no account cost what a wrong
 // password costs. Without it, the unknown case returns without doing any argon2
 // work at all, and the difference is measurable from outside.
@@ -254,13 +263,16 @@ func (s *Store) SetDisabled(ctx context.Context, id string, disabled bool) error
 	defer tx.Rollback(ctx)
 
 	q := s.q.WithTx(tx)
+	if err := q.LockOwnerGuard(ctx, ownerGuardLockID); err != nil {
+		return fmt.Errorf("auth: lock owner guard: %w", err)
+	}
 	rows, err := q.SetAdminUserDisabledUnlessLastOwner(ctx,
 		gen.SetAdminUserDisabledUnlessLastOwnerParams{ID: id, Disabled: disabled})
 	if err != nil {
 		return translate(fmt.Errorf("auth: set disabled: %w", err))
 	}
 	if rows == 0 {
-		return s.refusal(ctx, id)
+		return s.refusal(ctx, q, id)
 	}
 	if disabled {
 		if _, err := q.DeleteAdminSessionsForUser(ctx, id); err != nil {
@@ -292,16 +304,33 @@ func (s *Store) SetRole(ctx context.Context, id string, role Role) error {
 	defer tx.Rollback(ctx)
 
 	q := s.q.WithTx(tx)
+	if err := q.LockOwnerGuard(ctx, ownerGuardLockID); err != nil {
+		return fmt.Errorf("auth: lock owner guard: %w", err)
+	}
+
+	// Read the current role inside the transaction, so that "did this actually
+	// change anything" is answered against the same snapshot the UPDATE runs in.
+	before, err := q.GetAdminUser(ctx, id)
+	if err != nil {
+		return translate(fmt.Errorf("auth: get user: %w", err))
+	}
+
 	rows, err := q.SetAdminUserRoleUnlessLastOwner(ctx,
 		gen.SetAdminUserRoleUnlessLastOwnerParams{ID: id, Role: string(role)})
 	if err != nil {
 		return translate(fmt.Errorf("auth: set role: %w", err))
 	}
 	if rows == 0 {
-		return s.refusal(ctx, id)
+		return s.refusal(ctx, q, id)
 	}
-	if _, err := q.DeleteAdminSessionsForUser(ctx, id); err != nil {
-		return translate(fmt.Errorf("auth: end sessions: %w", err))
+	// Only when the role really moved. Saving the account form without touching
+	// the role select would otherwise sign that administrator out of every
+	// device — including, if they are editing themselves, the session they are
+	// doing it from.
+	if Role(before.Role) != role {
+		if _, err := q.DeleteAdminSessionsForUser(ctx, id); err != nil {
+			return translate(fmt.Errorf("auth: end sessions: %w", err))
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -314,9 +343,16 @@ func (s *Store) SetRole(ctx context.Context, id string, role Role) error {
 // account is not there, or the guard turned it down. Neither is inferable from
 // the row count alone, and a handler needs to answer 404 for one and explain the
 // other.
-func (s *Store) refusal(ctx context.Context, id string) error {
-	if _, err := s.Get(ctx, id); err != nil {
-		return err
+//
+// It takes the caller's transaction-bound querier rather than reaching for
+// s.q. Using the pool here would acquire a *second* connection while the
+// caller's transaction still holds the first: enough concurrent guarded writes
+// to exhaust the pool and every one of them waits for a connection only another
+// of them can release, until the context expires. It would also read outside the
+// transaction's snapshot, which is the wrong answer to the question being asked.
+func (s *Store) refusal(ctx context.Context, q *gen.Queries, id string) error {
+	if _, err := q.GetAdminUser(ctx, id); err != nil {
+		return translate(fmt.Errorf("auth: get user: %w", err))
 	}
 	return ErrLastOwner
 }
@@ -371,14 +407,11 @@ func (s *Store) CreateSetupToken(ctx context.Context, token string) (bool, error
 
 // SetupPending reports whether a setup token exists and has not been spent.
 func (s *Store) SetupPending(ctx context.Context) (bool, error) {
-	row, err := s.q.GetSetupToken(ctx)
+	pending, err := s.q.SetupPending(ctx)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil
-		}
-		return false, translate(fmt.Errorf("auth: setup token: %w", err))
+		return false, translate(fmt.Errorf("auth: setup pending: %w", err))
 	}
-	return row.ConsumedAt == nil, nil
+	return pending, nil
 }
 
 // CheckSetupToken reports whether token is the unspent setup token.

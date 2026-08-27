@@ -1,17 +1,17 @@
-// Package auth authenticates the single store operator.
+// Package auth holds the administrator accounts, their roles, and the passwords
+// and sessions that get them in.
 //
-// There is one admin, one password, and no sessions table: a session is a
-// signed, self-describing cookie value, so verifying a request costs no
-// database round trip and expiry needs no cleanup job. Adding a second admin,
-// or needing to revoke one session immediately, is the documented point at
-// which this should become a `sessions` table instead.
+// The single-operator design this package started as — one ADMIN_PASSWORD_HASH
+// in the environment and a signed, self-describing cookie carrying nothing but
+// an expiry — reached the trigger it always documented for itself: a second
+// administrator with different permissions, and per-session revocation. Named
+// accounts, roles and an admin_sessions table are what replace it, in
+// model.go and store.go.
 //
-// The signing and encoding are gorilla/securecookie's rather than ours. It is
-// the standard implementation of exactly this, its MAC covers the cookie's name
-// as well as its value, and it supports verifying against a previous key so a
-// secret can be rotated without signing the operator out. Hand-rolled crypto in
-// a project other people copy as an example is a worse trade than one small,
-// well-reviewed dependency.
+// This file is the tail of that older design and is still what authenticates a
+// request. It goes when the handlers move onto Store's session methods; until
+// then both exist, and the securecookie path is the live one. Nothing new should
+// be built on it.
 package auth
 
 import (

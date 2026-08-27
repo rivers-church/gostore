@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/17xande-dev/gostore/internal/dbtest"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -527,4 +528,173 @@ func timeCall(fn func()) time.Duration {
 	start := time.Now()
 	fn()
 	return time.Since(start)
+}
+
+// TestOwnerGuardSerialisesConcurrentWriters pins the fix for a race the guard's
+// count subquery does not close on its own.
+//
+// Two transactions removing *different* owners touch different rows, so they take
+// no lock in common, and under READ COMMITTED each evaluates the count against
+// its own snapshot: both see two enabled owners, both pass, both commit, and the
+// store is left with none. That is reproducible in a psql session in seconds.
+//
+// The interleaving is driven explicitly rather than by racing two goroutines and
+// hoping. A timing-based version of this test passed just as happily with the
+// advisory lock removed, which makes it worse than no test at all: what is
+// asserted here is that the second writer *blocks* until the first commits, and
+// is then refused by a count it can finally trust.
+func TestOwnerGuardSerialisesConcurrentWriters(t *testing.T) {
+	s, pool, ctx := newStore(t)
+	a := mustCreate(t, s, ctx, "a@example.com", "correct horse battery", RoleOwner)
+	b := mustCreate(t, s, ctx, "b@example.com", "correct horse battery", RoleOwner)
+
+	// Two dedicated connections, so the two transactions are genuinely separate.
+	connA, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire A: %v", err)
+	}
+	defer connA.Release()
+	connB, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire B: %v", err)
+	}
+	defer connB.Release()
+
+	const guard = `UPDATE admin_users u SET disabled = TRUE
+		WHERE u.id = $1
+		  AND (u.disabled = TRUE
+		       OR u.role <> 'owner'
+		       OR (SELECT count(*) FROM admin_users o
+		           WHERE o.role = 'owner' AND NOT o.disabled) > 1)`
+
+	txA, err := connA.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin A: %v", err)
+	}
+	defer txA.Rollback(ctx)
+	if _, err := txA.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, ownerGuardLockID); err != nil {
+		t.Fatalf("lock A: %v", err)
+	}
+	tagA, err := txA.Exec(ctx, guard, a.ID)
+	if err != nil {
+		t.Fatalf("guard A: %v", err)
+	}
+	if tagA.RowsAffected() != 1 {
+		t.Fatalf("the first writer was refused with two owners enabled")
+	}
+
+	// B now tries to take the same lock while A holds it. It must not get through.
+	blocked := make(chan error, 1)
+	go func() {
+		txB, err := connB.Begin(ctx)
+		if err != nil {
+			blocked <- err
+			return
+		}
+		defer txB.Rollback(ctx)
+		if _, err := txB.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, ownerGuardLockID); err != nil {
+			blocked <- err
+			return
+		}
+		tagB, err := txB.Exec(ctx, guard, b.ID)
+		if err != nil {
+			blocked <- err
+			return
+		}
+		if tagB.RowsAffected() != 0 {
+			blocked <- errors.New("the second writer removed the last enabled owner")
+			return
+		}
+		blocked <- txB.Commit(ctx)
+	}()
+
+	select {
+	case err := <-blocked:
+		t.Fatalf("the second writer did not wait for the first: %v", err)
+	case <-time.After(250 * time.Millisecond):
+		// Still waiting on the lock, which is the point.
+	}
+
+	if err := txA.Commit(ctx); err != nil {
+		t.Fatalf("commit A: %v", err)
+	}
+	select {
+	case err := <-blocked:
+		if err != nil {
+			t.Fatalf("the second writer: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the second writer never proceeded after the first committed")
+	}
+
+	// The property all of this exists for.
+	users, err := s.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	enabled := 0
+	for _, u := range users {
+		if u.Role == RoleOwner && !u.Disabled {
+			enabled++
+		}
+	}
+	if enabled != 1 {
+		t.Errorf("%d enabled owners remain, want 1", enabled)
+	}
+}
+
+// TestSetRoleToTheSameRoleKeepsSessions guards against an account form that
+// signs somebody out for saving it without touching the role select — including,
+// when they are editing themselves, out of the session they are using.
+func TestSetRoleToTheSameRoleKeepsSessions(t *testing.T) {
+	s, pool, ctx := newStore(t)
+	mustCreate(t, s, ctx, "owner@example.com", "correct horse battery", RoleOwner)
+	u := mustCreate(t, s, ctx, "manager@example.com", "correct horse battery", RoleManager)
+	session(t, pool, ctx, u.ID)
+
+	if err := s.SetRole(ctx, u.ID, RoleManager); err != nil {
+		t.Fatalf("SetRole to the role it already has: %v", err)
+	}
+	if n, _ := s.CountSessionsForUser(ctx, u.ID); n != 1 {
+		t.Errorf("a no-op role save left %d sessions, want the 1 it started with", n)
+	}
+
+	// A real change still ends them, which is the behaviour this must not break.
+	if err := s.SetRole(ctx, u.ID, RoleViewer); err != nil {
+		t.Fatalf("SetRole: %v", err)
+	}
+	if n, _ := s.CountSessionsForUser(ctx, u.ID); n != 0 {
+		t.Errorf("a real demotion left %d sessions live, want 0", n)
+	}
+}
+
+// TestExpiredSessionsAreNotReturnedByTheLookup pins expiry to the lookup query
+// itself, rather than to whichever handler Phase 2 wires onto it remembering to
+// compare ExpiresAt afterwards. The sweep is not the backstop: it is housekeeping
+// against unbounded growth, and between two sweeps the table is full of expired
+// rows that a predicate-less lookup would happily authenticate.
+//
+// This goes through the generated query directly because the Store method that
+// will wrap it does not exist yet; the behaviour being pinned is the query's.
+func TestExpiredSessionsAreNotReturnedByTheLookup(t *testing.T) {
+	s, pool, ctx := newStore(t)
+	u := mustCreate(t, s, ctx, "owner@example.com", "correct horse battery", RoleOwner)
+
+	live, expired := randomLabel(t), randomLabel(t)
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO admin_sessions (token_hash, user_id, expires_at)
+		 VALUES ($1, $2, now() + interval '1 hour'),
+		        ($3, $2, now() - interval '1 second')`,
+		hashToken(live), u.ID, hashToken(expired)); err != nil {
+		t.Fatalf("insert sessions: %v", err)
+	}
+
+	if _, err := s.q.GetAdminSession(ctx, hashToken(expired)); !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("an expired session was returned by the lookup (err = %v), want no rows", err)
+	}
+	// The live one still resolving is what stops the predicate being trivially
+	// satisfied by returning nothing at all.
+	if _, err := s.q.GetAdminSession(ctx, hashToken(live)); err != nil {
+		t.Errorf("the live session did not resolve: %v", err)
+	}
 }

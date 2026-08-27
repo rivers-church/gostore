@@ -273,6 +273,14 @@ func maxLen(e FormErrors, field, value string, max int) {
 // way its writer would measure it rather than in UTF-8 bytes.
 const MinPasswordLength = 12
 
+// MaxPasswordLength bounds the other end. Nothing about a password needs to be
+// longer than this, and the input is fed straight to argon2id, which allocates
+// its 64 MiB and hashes whatever it is given: an unbounded field is a way to
+// spend a server's memory and CPU from a form, and the login rate limit counts
+// requests rather than bytes. Every other field in this package is bounded for
+// less reason than this one.
+const MaxPasswordLength = 1024
+
 // Password checks a new password and its confirmation, writing any problems into
 // e under "password" and "password_confirm".
 //
@@ -285,6 +293,8 @@ func Password(e FormErrors, password, confirm string) {
 		e.Add("password", "Required.")
 	case utf8.RuneCountInString(password) < MinPasswordLength:
 		e.Add("password", fmt.Sprintf("Use at least %d characters.", MinPasswordLength))
+	case utf8.RuneCountInString(password) > MaxPasswordLength:
+		e.Add("password", fmt.Sprintf("Use at most %d characters.", MaxPasswordLength))
 	}
 	// Only worth reporting once the password itself is acceptable — otherwise a
 	// blank pair produces two errors saying the same thing.
