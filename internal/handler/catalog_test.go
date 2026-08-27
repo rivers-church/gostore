@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/17xande-dev/gostore/internal/auth"
 	"github.com/17xande-dev/gostore/internal/blob"
 	"github.com/17xande-dev/gostore/internal/cart"
 	"github.com/17xande-dev/gostore/internal/catalog"
@@ -38,7 +39,7 @@ func newStorefront(t *testing.T, cfg config.Config, templateDir string) (*httpte
 		Catalog: store, Carts: cart.NewStore(pool), Orders: orders.NewStore(pool),
 		Grants:  downloads.NewStore(pool, store),
 		Gateway: gateway, Mail: email.NewFake(), Images: images,
-		Files: blob.NewFakeDownloads(), Sessions: testSessions(t),
+		Files: blob.NewFakeDownloads(), Users: auth.NewStore(pool),
 	})
 
 	mux := http.NewServeMux()

@@ -39,9 +39,13 @@ type Handler struct {
 	// They are never interchangeable: putting a purchased file through blob would
 	// publish it, and it is worth the two fields being named differently enough
 	// that the mistake looks wrong at the call site.
-	blob     blob.Storage
-	files    blob.Downloads
-	sessions *auth.Sessions
+	blob  blob.Storage
+	files blob.Downloads
+
+	// users is the administrator accounts and their sessions. The handler needs it
+	// for the login, sign-out and setup-claim routes; RequireAdmin holds the same
+	// store for the lookup it does on every protected request.
+	users *auth.Store
 
 	// limits are built here from cfg rather than passed in, so that a rate limit is
 	// applied on the line that registers the route it protects — the same reasoning
@@ -94,18 +98,18 @@ func (h *Handler) rateLimited(w http.ResponseWriter, r *http.Request) {
 // putting the public image bucket where the private download store belongs —
 // which would compile, pass most tests, and publish every purchased file.
 type Deps struct {
-	Config   config.Config
-	Log      *slog.Logger
-	Tmpl     *Templates
-	Catalog  *catalog.Store
-	Carts    *cart.Store
-	Orders   *orders.Store
-	Grants   *downloads.Store
-	Gateway  payment.Gateway
-	Mail     email.Sender
-	Images   blob.Storage
-	Files    blob.Downloads
-	Sessions *auth.Sessions
+	Config  config.Config
+	Log     *slog.Logger
+	Tmpl    *Templates
+	Catalog *catalog.Store
+	Carts   *cart.Store
+	Orders  *orders.Store
+	Grants  *downloads.Store
+	Gateway payment.Gateway
+	Mail    email.Sender
+	Images  blob.Storage
+	Files   blob.Downloads
+	Users   *auth.Store
 }
 
 func New(d Deps) *Handler {
@@ -113,7 +117,7 @@ func New(d Deps) *Handler {
 	h := &Handler{
 		cfg: cfg, log: log, tmpl: d.Tmpl, cat: d.Catalog, cart: d.Carts,
 		orders: d.Orders, grants: d.Grants, gateway: d.Gateway, mail: d.Mail,
-		blob: d.Images, files: d.Files, sessions: d.Sessions,
+		blob: d.Images, files: d.Files, users: d.Users,
 	}
 	// Both storage backends are optional and both must be non-nil, so that a
 	// caller omitting one gets a refusal with a message rather than a nil panic on
@@ -221,6 +225,12 @@ func (h *Handler) RegisterAdmin(mux *http.ServeMux, protect middleware.Middlewar
 	// argon2id's cost already makes each attempt expensive, but cost is not a limit.
 	mux.Handle("POST /admin/login", h.limits.login(http.HandlerFunc(h.adminLogin)))
 	mux.HandleFunc("POST /admin/logout", h.adminLogout)
+	// The first-account claim, unprotected because there is no account to
+	// authenticate as yet — the setup token is the credential. Both routes answer
+	// 404 the moment an administrator exists, and the POST shares the login
+	// limiter because it too verifies a secret.
+	mux.HandleFunc("GET /admin/setup", h.adminSetupForm)
+	mux.Handle("POST /admin/setup", h.limits.login(http.HandlerFunc(h.adminSetupClaim)))
 
 	admin := func(pattern string, handler http.HandlerFunc) {
 		mux.Handle(pattern, protect(handler))

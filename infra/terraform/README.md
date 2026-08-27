@@ -17,13 +17,20 @@ is provider-specific to `google` — see "Portability" below.
   `prevent_destroy` is set — an accidental `terraform destroy` must not be
   able to take out the database.
 - **`secrets.tf`** — `DATABASE_URL` is assembled from the values above and
-  written to Secret Manager automatically. `SESSION_SECRET`,
-  `ADMIN_PASSWORD_HASH`, the PayFast credentials, and `SMTP_PASSWORD` get
-  empty secret *containers* only — Terraform owns the infrastructure, not
-  values that come from a human decision (`make hashpw`, PayFast's
-  dashboard). Add versions to those by hand after `apply`:
+  written to Secret Manager automatically, and so is `SETUP_TOKEN`: the
+  one-time token that claims the first administrator account at
+  `/admin/setup`. Read it after `apply` with
   ```sh
-  gcloud secrets versions add gostore-session-secret --data-file=-
+  gcloud secrets versions access latest --secret=gostore-setup-token
+  ```
+  There is no admin password or session secret to supply — accounts live in
+  the database and a session is a row in `admin_sessions`. The PayFast
+  credentials and `SMTP_PASSWORD` get empty secret *containers* only:
+  Terraform owns the infrastructure, not values that come from a human
+  decision (PayFast's dashboard, the mail provider). Add versions to those by
+  hand after `apply`:
+  ```sh
+  gcloud secrets versions add gostore-payfast-merchant-key --data-file=-
   ```
 - **`run.tf`** — a dedicated Cloud Run runtime service account (not the
   project's default Compute Engine service account — see "Why a dedicated

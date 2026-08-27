@@ -6,12 +6,22 @@
 
 <form method="post" action="/admin/login">
   {{template "csrf" .CSRFToken}}
-  <p>
-    <label>Password<br>
-      <input type="password" name="password" autocomplete="current-password" autofocus required>
-    </label>
-  </p>
-  <p><button type="submit">Sign in</button></p>
+  {{/* Where they were going before the redirect, already reduced to a path under
+       /admin/ by handler.safeNext. Carried in the form rather than the action's
+       query string so it survives a rejected attempt. */}}
+  {{with .Next}}<input type="hidden" name="next" value="{{.}}">{{end}}
+  <div class="field">
+    <label for="email">Email</label>
+    <input id="email" type="email" name="email" value="{{.Email}}"
+           autocomplete="username" autocapitalize="none" autofocus required>
+  </div>
+  <div class="field">
+    <label for="password">Password</label>
+    <input id="password" type="password" name="password" autocomplete="current-password" required>
+  </div>
+  <div class="actions">
+    <button type="submit">Sign in</button>
+  </div>
 </form>
 
 {{end}}

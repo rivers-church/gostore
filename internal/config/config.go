@@ -5,7 +5,6 @@
 package config
 
 import (
-	"encoding/base64"
 	"fmt"
 	"math"
 	"net/url"
@@ -16,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/17xande-dev/gostore/internal/auth"
 	"github.com/17xande-dev/gostore/internal/blob"
 	"github.com/17xande-dev/gostore/internal/email"
 )
@@ -54,20 +52,19 @@ type Config struct {
 	// THEME_RELOAD says otherwise; the compose stack sets it.
 	ThemeReload bool
 
-	// Admin authentication. The password is stored only as an argon2id hash — a
-	// bcrypt one from an older deployment still verifies — so a leaked env file or
-	// a process listing does not hand over the credential, which matters more than
-	// usual for a project others will copy as an example. Generate one with
-	// `go run ./cmd/hashpw`.
-	AdminPasswordHash string
-	SessionSecret     []byte
-	SessionTTL        time.Duration
+	// SessionTTL is how long a sign-in lasts. A session is a row in
+	// admin_sessions and a cookie carrying a random token; there is no secret to
+	// configure, because there is nothing signed to verify — see internal/auth.
+	SessionTTL time.Duration
 
-	// SessionSecretPrevious, when set, is still accepted for verifying existing
-	// sessions but never used to sign new ones — so SESSION_SECRET can be
-	// rotated without signing the operator out. Remove it once every session
-	// signed with it has expired.
-	SessionSecretPrevious []byte
+	// SetupToken is the one-time token that may claim the first administrator
+	// account, supplied rather than generated.
+	//
+	// It exists for an automated deploy, which cannot read a token out of a log
+	// line and paste it into a form. Empty is the ordinary case: the server
+	// generates one on first boot against an empty admin_users and prints it.
+	// Either way it is stored only as a hash and is spent by the first claim.
+	SetupToken string
 
 	// PayFast is the payment gateway's configuration. It is a flat struct here
 	// rather than the gateway package's own Config so that config depends on no
@@ -203,6 +200,12 @@ type Config struct {
 // documentation for testing, and therefore the one every copy of this project's
 // .env.example and compose.yaml carries. It is a constant here so that "still on
 // the demo credentials" is something the config can recognise.
+// MinSetupTokenLen is the shortest SETUP_TOKEN accepted. The token is, for as
+// long as it is unclaimed, the credential for the whole admin area, so it is held
+// to the length 32 random bytes reach in base64 rather than to anything a person
+// would type.
+const MinSetupTokenLen = 32
+
 const payFastSandboxMerchantID = "10000100"
 
 // PayFast is what the PayFast gateway needs from the environment. The merchant
@@ -365,21 +368,21 @@ func (c Config) AllowsEmbedding() bool { return len(c.EmbedOrigins) > 0 }
 // returning an error listing every missing or malformed required value.
 func Load() (Config, error) {
 	c := Config{
-		Port:              env("PORT", "8080"),
-		BaseURL:           strings.TrimRight(env("BASE_URL", "http://localhost:8080"), "/"),
-		DatabaseURL:       os.Getenv("DATABASE_URL"),
-		StoreName:         env("STORE_NAME", "gostore"),
-		Currency:          env("CURRENCY", "ZAR"),
-		TemplateDir:       os.Getenv("TEMPLATE_DIR"),
-		StaticDir:         strings.TrimSpace(os.Getenv("STATIC_DIR")),
-		ThemeReload:       boolEnv("THEME_RELOAD", false),
-		LogLevel:          env("LOG_LEVEL", "info"),
-		LogFormat:         env("LOG_FORMAT", "json"),
-		AdminPasswordHash: os.Getenv("ADMIN_PASSWORD_HASH"),
-		SessionTTL:        24 * time.Hour,
-		ShutdownTimeout:   15 * time.Second,
-		TrustProxyIP:      boolEnv("TRUST_PROXY_IP", false),
-		CartTTLDays:       60,
+		Port:            env("PORT", "8080"),
+		BaseURL:         strings.TrimRight(env("BASE_URL", "http://localhost:8080"), "/"),
+		DatabaseURL:     os.Getenv("DATABASE_URL"),
+		StoreName:       env("STORE_NAME", "gostore"),
+		Currency:        env("CURRENCY", "ZAR"),
+		TemplateDir:     os.Getenv("TEMPLATE_DIR"),
+		StaticDir:       strings.TrimSpace(os.Getenv("STATIC_DIR")),
+		ThemeReload:     boolEnv("THEME_RELOAD", false),
+		LogLevel:        env("LOG_LEVEL", "info"),
+		LogFormat:       env("LOG_FORMAT", "json"),
+		SetupToken:      strings.TrimSpace(os.Getenv("SETUP_TOKEN")),
+		SessionTTL:      24 * time.Hour,
+		ShutdownTimeout: 15 * time.Second,
+		TrustProxyIP:    boolEnv("TRUST_PROXY_IP", false),
+		CartTTLDays:     60,
 		RateLimits: RateLimits{
 			LoginPerMinute:    10,
 			CheckoutPerMinute: 20,
@@ -447,37 +450,18 @@ func Load() (Config, error) {
 	if c.PayFast.MerchantKey == "" {
 		missing = append(missing, "PAYFAST_MERCHANT_KEY")
 	}
-	// The admin credentials are required rather than optional-with-a-default:
-	// a store whose admin is reachable without a password is worse than a store
-	// that refuses to start.
-	if c.AdminPasswordHash == "" {
-		missing = append(missing, "ADMIN_PASSWORD_HASH")
-	}
-	secret := os.Getenv("SESSION_SECRET")
-	if secret == "" {
-		missing = append(missing, "SESSION_SECRET")
-	}
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf("config: required env vars not set: %s", strings.Join(missing, ", "))
 	}
 
-	// A hash the server cannot read is an admin who can never sign in, with nothing
-	// in the logs to explain it. Checked here so it is a boot failure naming the
-	// problem instead.
-	if err := auth.ParsePasswordHash(c.AdminPasswordHash); err != nil {
-		return Config{}, fmt.Errorf("config: ADMIN_PASSWORD_HASH: %w", err)
-	}
-
-	decoded, err := decodeSecret("SESSION_SECRET", secret)
-	if err != nil {
-		return Config{}, err
-	}
-	c.SessionSecret = decoded
-	if prev := os.Getenv("SESSION_SECRET_PREVIOUS"); prev != "" {
-		c.SessionSecretPrevious, err = decodeSecret("SESSION_SECRET_PREVIOUS", prev)
-		if err != nil {
-			return Config{}, err
-		}
+	// There is no admin credential in the environment any more: accounts live in
+	// admin_users and the first one is claimed at /admin/setup. What can be
+	// supplied is the token that authorises that claim, and a short one is a
+	// guessable credential for the whole admin area — so it is bounded here,
+	// where the message can say so, rather than accepted and regretted.
+	if c.SetupToken != "" && len(c.SetupToken) < MinSetupTokenLen {
+		return Config{}, fmt.Errorf("config: SETUP_TOKEN is %d characters, want at least %d "+
+			"(generate one with `openssl rand -base64 32`)", len(c.SetupToken), MinSetupTokenLen)
 	}
 
 	if h, ok := os.LookupEnv("SESSION_TTL_HOURS"); ok {
@@ -519,6 +503,7 @@ func Load() (Config, error) {
 				"credentials, or leave PAYFAST_SANDBOX=true", payFastSandboxMerchantID)
 	}
 
+	var err error
 	// "*" is allowed here and nowhere else: the fragments these origins may fetch
 	// are cookie-free and read-only, so a permissive list cannot become a way to
 	// act as somebody.
@@ -710,18 +695,6 @@ func Load() (Config, error) {
 	}
 
 	return c, nil
-}
-
-func decodeSecret(name, value string) ([]byte, error) {
-	decoded, err := base64.StdEncoding.DecodeString(value)
-	if err != nil {
-		return nil, fmt.Errorf("config: %s must be base64: %w", name, err)
-	}
-	if len(decoded) < auth.MinSecretLen {
-		return nil, fmt.Errorf("config: %s decodes to %d bytes, want at least %d "+
-			"(generate one with `openssl rand -base64 32`)", name, len(decoded), auth.MinSecretLen)
-	}
-	return decoded, nil
 }
 
 // parseOrigins reads a comma-separated origin list from the environment.

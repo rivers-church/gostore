@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/17xande-dev/gostore/internal/auth"
 	"github.com/17xande-dev/gostore/internal/blob"
 	"github.com/17xande-dev/gostore/internal/cart"
 	"github.com/17xande-dev/gostore/internal/catalog"
@@ -196,9 +197,6 @@ func TestErrorPages_DetailShownInDevAndHiddenInProduction(t *testing.T) {
 func TestConfig_ShowErrorDetailFollowsBaseURL(t *testing.T) {
 	// The derivation itself, without a server in the way.
 	t.Setenv("DATABASE_URL", "postgres://x/y")
-	t.Setenv("ADMIN_PASSWORD_HASH",
-		"$argon2id$v=19$m=65536,t=3,p=4$yfEWKr5x66MgQhGsKGkGqQ$pzrCItWG+8g7Gv9rpUaBuG2vnTquuRCC0KU+fafR9T4")
-	t.Setenv("SESSION_SECRET", "ZGV2ZWxvcG1lbnQtb25seS1zZXNzaW9uLXNlY3JldC0wMDA=")
 	t.Setenv("PAYFAST_MERCHANT_ID", "10000100")
 	t.Setenv("PAYFAST_MERCHANT_KEY", "46f0cd694581a")
 	// Images and mail are required, and this test is about neither — it just has
@@ -302,7 +300,7 @@ func brokenStorefront(t *testing.T, cfg config.Config) *httptest.Server {
 		Catalog: store, Carts: cart.NewStore(pool), Orders: orders.NewStore(pool),
 		Grants:  downloads.NewStore(pool, store),
 		Gateway: gateway, Mail: email.NewFake(), Images: images,
-		Files: blob.NewFakeDownloads(), Sessions: testSessions(t),
+		Files: blob.NewFakeDownloads(), Users: auth.NewStore(pool),
 	})
 
 	mux := http.NewServeMux()

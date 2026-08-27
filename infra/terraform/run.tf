@@ -12,8 +12,7 @@ resource "google_project_iam_member" "run_cloudsql_client" {
 resource "google_secret_manager_secret_iam_member" "run_secret_access" {
   for_each = toset([
     google_secret_manager_secret.database_url.secret_id,
-    google_secret_manager_secret.session_secret.secret_id,
-    google_secret_manager_secret.admin_password_hash.secret_id,
+    google_secret_manager_secret.setup_token.secret_id,
     google_secret_manager_secret.payfast_merchant_id.secret_id,
     google_secret_manager_secret.payfast_merchant_key.secret_id,
     google_secret_manager_secret.payfast_passphrase.secret_id,
@@ -53,19 +52,10 @@ resource "google_cloud_run_v2_service" "main" {
         }
       }
       env {
-        name = "SESSION_SECRET"
+        name = "SETUP_TOKEN"
         value_source {
           secret_key_ref {
-            secret  = google_secret_manager_secret.session_secret.secret_id
-            version = "latest"
-          }
-        }
-      }
-      env {
-        name = "ADMIN_PASSWORD_HASH"
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.admin_password_hash.secret_id
+            secret  = google_secret_manager_secret.setup_token.secret_id
             version = "latest"
           }
         }

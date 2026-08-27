@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
 	"fmt"
@@ -500,13 +499,7 @@ var ErrSetupClosed = errors.New("auth: setup has already been completed")
 // ErrBadSetupToken means the token offered does not match the one issued.
 var ErrBadSetupToken = errors.New("auth: setup token is not right")
 
-// hashToken is sha256 and deliberately not a KDF. A setup or session token is 32
-// bytes of uniform randomness with nothing to guess, so a slow hash would buy no
-// resistance and be paid on every request that carries one.
-func hashToken(token string) []byte {
-	sum := sha256.Sum256([]byte(token))
-	return sum[:]
-}
+// hashToken and the session methods are in session.go.
 
 // constantTimeEqual compares two hashes without an early return. The hashes are
 // not secret in the way a key is, but the comparison is against a value derived

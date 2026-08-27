@@ -3,7 +3,6 @@ module github.com/17xande-dev/gostore
 go 1.26.5
 
 require (
-	github.com/gorilla/securecookie v1.1.2
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/justinas/nosurf v1.2.0
 	github.com/minio/minio-go/v7 v7.2.1

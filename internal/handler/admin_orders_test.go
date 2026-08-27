@@ -30,8 +30,9 @@ func TestAdminOrders_RequiresASession(t *testing.T) {
 		if res.StatusCode != http.StatusSeeOther {
 			t.Errorf("GET %s unauthenticated = %d, want 303", path, res.StatusCode)
 		}
-		if got := res.Header.Get("Location"); got != "/admin/login" {
-			t.Errorf("GET %s redirected to %q, want /admin/login", path, got)
+		// The login form, told where they were going so signing in resumes it.
+		if got := res.Header.Get("Location"); !strings.HasPrefix(got, "/admin/login?next=") {
+			t.Errorf("GET %s redirected to %q, want the login form with a next", path, got)
 		}
 		if strings.Contains(body, "Jane Doe") || strings.Contains(body, "1 Example Road") {
 			t.Errorf("GET %s leaked customer details to an unauthenticated request", path)

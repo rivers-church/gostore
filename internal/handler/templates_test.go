@@ -32,6 +32,7 @@ func testPages() map[string]any {
 		"error_client":       errorPageData{page: p, Status: 403, Heading: "No"},
 		"error_server":       errorPageData{page: p, Status: 500, Heading: "Sorry"},
 		"admin_login":        loginPage{page: p},
+		"admin_setup":        setupPage{page: p},
 		"admin_products":     productsPage{page: p},
 		"admin_product_form": productFormPage{page: p, IsNew: true},
 		"admin_categories":   categoriesPage{page: p},

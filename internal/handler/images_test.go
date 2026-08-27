@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/17xande-dev/gostore/internal/auth"
 	"github.com/17xande-dev/gostore/internal/blob"
 	"github.com/17xande-dev/gostore/internal/cart"
 	"github.com/17xande-dev/gostore/internal/catalog"
@@ -45,7 +46,7 @@ func diskShop(t *testing.T) (*httptest.Server, *blob.Disk, string) {
 		Catalog: cat, Carts: cart.NewStore(pool), Orders: orders.NewStore(pool),
 		Grants:  downloads.NewStore(pool, cat),
 		Gateway: payment.NewFake(), Mail: email.NewFake(), Images: storage,
-		Files: blob.NewFakeDownloads(), Sessions: testSessions(t),
+		Files: blob.NewFakeDownloads(), Users: auth.NewStore(pool),
 	})
 
 	mux := http.NewServeMux()

@@ -49,8 +49,8 @@ func run() error {
 	flag.Parse()
 
 	// The migration modes load only DATABASE_URL. A schema change has no gateway
-	// and no session, so a migration job should not have to be trusted with the
-	// merchant key and the session secret to run one — see config.LoadTool.
+	// and no mail relay, so a migration job should not have to be trusted with the
+	// merchant key and the SMTP password to run one — see config.LoadTool.
 	//
 	// What that gives up is the accident that a broken payment config used to
 	// fail at the migration step, before the schema moved. -check-config is that
@@ -100,8 +100,8 @@ func run() error {
 		return nil
 	}
 
-	sessions, err := auth.NewSessions(cfg.SessionSecret, cfg.SessionSecretPrevious, cfg.SessionTTL)
-	if err != nil {
+	users := auth.NewStore(pool)
+	if err := ensureSetupToken(ctx, users, cfg.SetupToken, log); err != nil {
 		return err
 	}
 
@@ -155,27 +155,28 @@ func run() error {
 	carts := cart.NewStore(pool)
 	cat := catalog.NewStore(pool)
 	h := handler.New(handler.Deps{
-		Config:   cfg,
-		Log:      log,
-		Tmpl:     tmpl,
-		Catalog:  cat,
-		Carts:    carts,
-		Orders:   orders.NewStore(pool),
-		Grants:   downloads.NewStore(pool, cat),
-		Gateway:  gateway,
-		Mail:     mail,
-		Images:   images,
-		Files:    files,
-		Sessions: sessions,
+		Config:  cfg,
+		Log:     log,
+		Tmpl:    tmpl,
+		Catalog: cat,
+		Carts:   carts,
+		Orders:  orders.NewStore(pool),
+		Grants:  downloads.NewStore(pool, cat),
+		Gateway: gateway,
+		Mail:    mail,
+		Images:  images,
+		Files:   files,
+		Users:   users,
 	})
 
-	// Abandoned carts are swept in-process, on this context, so it stops with the
-	// server rather than outliving it.
+	// Abandoned carts and expired admin sessions are swept in-process, on this
+	// context, so they stop with the server rather than outliving it.
 	startCartCleanup(ctx, carts, cfg.CartTTLDays, log)
+	startSessionCleanup(ctx, users, log)
 
 	srv := &http.Server{
 		Addr:              net.JoinHostPort("", cfg.Port),
-		Handler:           routes(cfg, h, gateway, sessions, pool, log),
+		Handler:           routes(cfg, h, gateway, users, pool, log),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -198,6 +199,62 @@ func run() error {
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cfg.ShutdownTimeout)
 	defer cancel()
 	return srv.Shutdown(shutdownCtx)
+}
+
+// ensureSetupToken makes sure a store with no administrators has a way to get its
+// first one, and says how in the log.
+//
+// The claim flow replaces both alternatives a bootstrap normally picks between: a
+// fixed default credential, which is a CVE class and worse in a project published
+// for others to copy, and an unguarded first-run wizard, which is a race anybody
+// who finds the deployment before its operator does can win. The cost is one
+// `docker compose logs`.
+//
+// Supplied and generated tokens differ in one way only: a supplied one is never
+// printed, because it is already wherever the deploy keeps its secrets and a log
+// line is a worse place for it to also be.
+func ensureSetupToken(ctx context.Context, users *auth.Store, supplied string, log *slog.Logger) error {
+	n, err := users.Count(ctx)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		// Claimed. Nothing to issue, and admin_setup keeps its consumed row for
+		// ever so this stays true across restarts and even if every account is
+		// later disabled.
+		return nil
+	}
+
+	token := supplied
+	if token == "" {
+		if token, err = auth.NewToken(); err != nil {
+			return err
+		}
+	}
+
+	stored, err := users.CreateSetupToken(ctx, token)
+	if err != nil {
+		return err
+	}
+	if !stored {
+		// A token is already there, unclaimed, and only its hash is — so this one
+		// cannot be reported and the earlier one cannot be recovered.
+		log.Warn("no administrator exists and a setup token has already been issued",
+			"visit", "/admin/setup",
+			"note", "the token was printed when it was issued; look further back in this log, "+
+				"or DELETE FROM admin_setup to have a new one issued on the next start")
+		return nil
+	}
+	if supplied != "" {
+		log.Info("no administrator exists; SETUP_TOKEN will claim the first account",
+			"visit", "/admin/setup")
+		return nil
+	}
+	// Deliberately one line and deliberately loud: this is the only place the
+	// token ever exists in plain text, and an operator has to be able to find it.
+	log.Warn("no administrator exists. Visit /admin/setup and use this one-time setup token",
+		"setup_token", token)
+	return nil
 }
 
 func printMigrationStatus(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) error {
@@ -395,7 +452,7 @@ func newBlobStorage(cfg config.Config, log *slog.Logger) (blob.Storage, error) {
 	return storage, nil
 }
 
-func routes(cfg config.Config, h *handler.Handler, gateway payment.Gateway, sessions *auth.Sessions, pool *pgxpool.Pool, log *slog.Logger) http.Handler {
+func routes(cfg config.Config, h *handler.Handler, gateway payment.Gateway, users *auth.Store, pool *pgxpool.Pool, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz(pool, log))
 
@@ -427,7 +484,7 @@ func routes(cfg config.Config, h *handler.Handler, gateway payment.Gateway, sess
 	// Everything that changes state is mounted here, behind CSRF protection and
 	// the cookie nosurf needs to set for it. The catalog reads stay outside:
 	// they are embeddable cross-origin, which means cookie-free.
-	firstParty := h.FirstPartyHandler(middleware.RequireAdmin(sessions, log))
+	firstParty := h.FirstPartyHandler(middleware.RequireAdmin(users, log))
 	mux.Handle("/admin/", firstParty)
 	// Both patterns: one matches /cart exactly, the other everything below it —
 	// which includes /cart/checkout, where the cart cookie is in scope.

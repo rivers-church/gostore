@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"bytes"
 	"html"
 	"io"
 	"log/slog"
@@ -11,7 +10,6 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -28,28 +26,35 @@ import (
 	"github.com/17xande-dev/gostore/internal/payment"
 )
 
-// testPassword is the admin password every test in this package signs in with.
-const testPassword = "correct horse battery staple"
+// testEmail and testPassword are the owner account every test in this package
+// signs in as. The account is created by newStore, not by configuration: there is
+// no admin credential in the environment any more.
+const (
+	testEmail    = "owner@example.com"
+	testPassword = "correct horse battery staple"
+)
 
-// testHash is argon2id at its cheapest: these tests assert on authentication
+// cheapHash is argon2id at its cheapest: these tests assert on authentication
 // behaviour, not on how expensive the hash is, and DefaultParams would add 64 MiB
-// and a tenth of a second to every sign-in here.
-var testHash = sync.OnceValue(func() string {
-	h, err := auth.HashPassword(testPassword,
+// and a tenth of a second to every account created here.
+//
+// The claim and change-password handlers hash at auth.DefaultParams, because they
+// are the real thing — this is only for accounts a test creates directly.
+func cheapHash(t *testing.T, password string) string {
+	t.Helper()
+	h, err := auth.HashPassword(password,
 		auth.Params{Memory: 64, Time: 1, Parallelism: 1, SaltLength: 16, KeyLength: 32})
 	if err != nil {
-		panic(err)
+		t.Fatalf("HashPassword: %v", err)
 	}
 	return h
-})
+}
 
 func testConfig() config.Config {
 	return config.Config{
-		StoreName:         "Test Store",
-		Currency:          "ZAR",
-		AdminPasswordHash: testHash(),
-		SessionSecret:     bytes.Repeat([]byte("s"), auth.MinSecretLen),
-		SessionTTL:        time.Hour,
+		StoreName:  "Test Store",
+		Currency:   "ZAR",
+		SessionTTL: time.Hour,
 	}
 }
 
@@ -70,6 +75,14 @@ type shop struct {
 	files  *blob.FakeDownloads
 	grants *downloads.Store
 
+	// users is the administrator accounts. Tests reach for it to create a second
+	// administrator, to revoke a session, or to assert on what a handler did to an
+	// account.
+	users *auth.Store
+	// owner is the account newStore creates and signIn signs in as. It is the zero
+	// User on a shop from newUnclaimedStore, which has no accounts at all.
+	owner auth.User
+
 	// variants is the stocked catalog, by size, for the tests that put things in
 	// a cart. Empty until stockCart has run.
 	variants map[string]catalog.Variant
@@ -83,22 +96,26 @@ func newServer(t *testing.T) (*httptest.Server, *catalog.Store) {
 	return s.srv, s.catalog
 }
 
-func testSessions(t *testing.T) *auth.Sessions {
-	t.Helper()
-	cfg := testConfig()
-	s, err := auth.NewSessions(cfg.SessionSecret, nil, cfg.SessionTTL)
-	if err != nil {
-		t.Fatalf("NewSessions: %v", err)
-	}
-	return s
-}
-
-// newStore mounts everything exactly as main.go does — same subtrees, same CSRF
+// The server is mounted exactly as main.go does it — same subtrees, same CSRF
 // wrapper, same middleware — with a cookie jar but no session yet. Tests that
 // build their own routing would stop testing what actually runs.
 // edit lets a test change the configuration before the handler reads it, which is
 // the only chance it gets — the handler takes a copy at construction.
+// newStore is newUnclaimedStore with one enabled owner already in it, which is
+// the state every test but the setup-flow ones wants: an admin area with an
+// account to sign in to.
 func newStore(t *testing.T, edit ...func(*config.Config)) *shop {
+	t.Helper()
+
+	s := newUnclaimedStore(t, edit...)
+	s.owner = mustAccount(t, s, testEmail, testPassword, auth.RoleOwner)
+	return s
+}
+
+// newUnclaimedStore mounts the server against a store with no administrators, as
+// a fresh deployment is before anybody claims it. Only the setup-flow tests want
+// this; everything else takes newStore.
+func newUnclaimedStore(t *testing.T, edit ...func(*config.Config)) *shop {
 	t.Helper()
 
 	cfg := testConfig()
@@ -118,24 +135,24 @@ func newStore(t *testing.T, edit ...func(*config.Config)) *shop {
 		t.Fatalf("ParseTemplates: %v", err)
 	}
 	log := slog.New(slog.DiscardHandler)
-	sessions := testSessions(t)
+	users := auth.NewStore(pool)
 	gateway := payment.NewFake()
 	mail := email.NewFake()
 	files := blob.NewFakeDownloads()
 	grants := downloads.NewStore(pool, store)
 	h := New(Deps{
-		Config:   cfg,
-		Log:      log,
-		Tmpl:     tmpl,
-		Catalog:  store,
-		Carts:    cart.NewStore(pool),
-		Orders:   orderStore,
-		Grants:   grants,
-		Gateway:  gateway,
-		Mail:     mail,
-		Images:   images,
-		Files:    files,
-		Sessions: sessions,
+		Config:  cfg,
+		Log:     log,
+		Tmpl:    tmpl,
+		Catalog: store,
+		Carts:   cart.NewStore(pool),
+		Orders:  orderStore,
+		Grants:  grants,
+		Gateway: gateway,
+		Mail:    mail,
+		Images:  images,
+		Files:   files,
+		Users:   users,
 	})
 
 	mux := http.NewServeMux()
@@ -145,7 +162,7 @@ func newStore(t *testing.T, edit ...func(*config.Config)) *shop {
 	h.RegisterStorefront(mux)
 	h.RegisterPayments(mux)
 	h.RegisterDownloads(mux)
-	firstParty := h.FirstPartyHandler(middleware.RequireAdmin(sessions, log))
+	firstParty := h.FirstPartyHandler(middleware.RequireAdmin(users, log))
 	mux.Handle("/admin/", firstParty)
 	mux.Handle("/cart", firstParty)
 	mux.Handle("/cart/", firstParty)
@@ -162,7 +179,7 @@ func newStore(t *testing.T, edit ...func(*config.Config)) *shop {
 	t.Cleanup(srv.Close)
 	return &shop{
 		srv: srv, catalog: store, orders: orderStore, gateway: gateway,
-		mail: mail, images: images, files: files, grants: grants,
+		mail: mail, images: images, files: files, grants: grants, users: users,
 	}
 }
 
@@ -172,17 +189,49 @@ func newStore(t *testing.T, edit ...func(*config.Config)) *shop {
 func setup(t *testing.T) (*httptest.Server, *catalog.Store) {
 	t.Helper()
 
-	srv, store := newServer(t)
-	signIn(t, srv)
-	return srv, store
+	s := setupShop(t)
+	return s.srv, s.catalog
 }
 
-func signIn(t *testing.T, srv *httptest.Server) {
+// setupShop is setup with everything else the server is made of, for the admin
+// tests that need to reach past the response — into the accounts, the orders or
+// the mail that went out.
+func setupShop(t *testing.T) *shop {
 	t.Helper()
 
-	res, body := post(t, srv, "/admin/login", url.Values{"password": {testPassword}})
+	s := newStore(t)
+	signIn(t, s.srv)
+	return s
+}
+
+// mustAccount creates an administrator, for the setup half of a test whose
+// subject is something else.
+func mustAccount(t *testing.T, s *shop, email, password string, role auth.Role) auth.User {
+	t.Helper()
+
+	u, err := s.users.Create(t.Context(), email, "", cheapHash(t, password), role, false)
+	if err != nil {
+		t.Fatalf("create %s (%s): %v", email, role, err)
+	}
+	return u
+}
+
+// signIn signs in as the owner newStore created. signInAs is the same thing for
+// any other account a test has made.
+func signIn(t *testing.T, srv *httptest.Server) {
+	t.Helper()
+	signInAs(t, srv, testEmail, testPassword)
+}
+
+func signInAs(t *testing.T, srv *httptest.Server, email, password string) {
+	t.Helper()
+
+	res, body := post(t, srv, "/admin/login", url.Values{
+		"email":    {email},
+		"password": {password},
+	})
 	if res.StatusCode != http.StatusSeeOther {
-		t.Fatalf("sign in = %d %s", res.StatusCode, body)
+		t.Fatalf("sign in as %s = %d %s", email, res.StatusCode, body)
 	}
 	if len(res.Cookies()) == 0 {
 		t.Fatal("sign in set no cookie")
@@ -646,19 +695,47 @@ func post(t *testing.T, srv *httptest.Server, path string, form url.Values) (*ht
 	return do(t, srv, req)
 }
 
+// newRequest builds a request against the test server without sending it, for a
+// test that has to set a header or a cookie of its own before it goes.
+func newRequest(t *testing.T, srv *httptest.Server, method, path string, form url.Values) *http.Request {
+	t.Helper()
+
+	var body io.Reader
+	if form != nil {
+		if _, set := form["csrf_token"]; !set {
+			form.Set("csrf_token", csrfToken(t, srv))
+		}
+		body = strings.NewReader(form.Encode())
+	}
+	req, err := http.NewRequestWithContext(t.Context(), method, srv.URL+path, body)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	if form != nil {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Origin", srv.URL)
+		req.Header.Set("Referer", srv.URL+path)
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+	}
+	return req
+}
+
 // csrfToken reads a token out of a rendered form. nosurf validates the
 // submitted token against the client's cookie, so any token issued to this jar
 // works for any later request from it.
 //
-// Which page depends on whether the client is signed in: the login form
-// redirects away once it is, and the new-product form is unreachable until it
-// is. Between them one of the two always renders.
+// Which page depends on the store's state: the login form redirects away once
+// the client is signed in and once nobody has claimed the store yet, the setup
+// page exists only in that second case, and the new-product form is unreachable
+// until signed in. Between the three one always renders.
 func csrfToken(t *testing.T, srv *httptest.Server) string {
 	t.Helper()
 
 	res, body := get(t, srv, "/admin/login")
 	if res.StatusCode != http.StatusOK {
-		_, body = get(t, srv, "/admin/products/new")
+		if res, body = get(t, srv, "/admin/setup"); res.StatusCode != http.StatusOK {
+			_, body = get(t, srv, "/admin/products/new")
+		}
 	}
 
 	m := csrfFieldRE.FindStringSubmatch(body)

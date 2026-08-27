@@ -1,19 +1,30 @@
-// Command hashpw turns a password into the bcrypt hash that goes in
-// ADMIN_PASSWORD_HASH.
+// Command hashpw turns a password into an argon2id hash.
 //
-// The password is read from stdin, never from a command-line argument, so it
-// does not end up in shell history or in another user's `ps` output:
+// It is a recovery path and not part of setting the store up. Administrators are
+// created at /admin/users, and the first one claims the store at /admin/setup with
+// the one-time token the server prints on its first boot — no password hash goes
+// into the environment any more.
 //
-//	read -rs ADMIN_PASSWORD && printf %s "$ADMIN_PASSWORD" | go run ./cmd/hashpw
+// What is left for this command is the case nothing in the admin can repair: every
+// enabled owner locked out, or the only account's password lost. With database
+// access, hash a new password here and set it:
 //
-// It also prints a fresh SESSION_SECRET, since the two are always needed
-// together and generating 32 random bytes by hand is a step people skip.
+//	read -rs P && printf %s "$P" | go run ./cmd/hashpw
+//	UPDATE admin_users SET password_hash = '<hash>', disabled = false,
+//	    must_change_password = true WHERE lower(email) = 'you@example.com';
+//	DELETE FROM admin_sessions WHERE user_id = (SELECT id FROM admin_users
+//	    WHERE lower(email) = 'you@example.com');
+//
+// The DELETE is the half worth remembering: changing the hash by hand skips
+// everything Store.SetPassword does around it, and a session issued under the old
+// password stays live otherwise.
+//
+// The password is read from stdin, never from a command-line argument, so it does
+// not end up in shell history or in another user's `ps` output.
 package main
 
 import (
 	"bufio"
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -41,13 +52,9 @@ func run() error {
 		return err
 	}
 
-	secret := make([]byte, auth.MinSecretLen)
-	if _, err := rand.Read(secret); err != nil {
-		return fmt.Errorf("hashpw: generate session secret: %w", err)
-	}
-
-	fmt.Printf("ADMIN_PASSWORD_HASH=%s\n", hash)
-	fmt.Printf("SESSION_SECRET=%s\n", base64.StdEncoding.EncodeToString(secret))
+	// The hash alone, on stdout, with nothing around it: it is going into a SQL
+	// statement, and a KEY=value line would only have to be edited back out.
+	fmt.Println(hash)
 	return nil
 }
 

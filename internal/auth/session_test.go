@@ -1,191 +1,200 @@
 package auth
 
 import (
-	"bytes"
+	"crypto/sha256"
 	"errors"
+	"strings"
 	"testing"
 	"time"
-
-	"github.com/gorilla/securecookie"
 )
 
-var (
-	testSecret = bytes.Repeat([]byte("k"), MinSecretLen)
-	otherKey   = bytes.Repeat([]byte("j"), MinSecretLen)
-)
+func TestNewToken_IsRandomAndURLSafe(t *testing.T) {
+	seen := make(map[string]bool, 64)
+	for range 64 {
+		token, err := NewToken()
+		if err != nil {
+			t.Fatalf("NewToken: %v", err)
+		}
+		if seen[token] {
+			t.Fatalf("NewToken returned %q twice", token)
+		}
+		seen[token] = true
 
-func newTestSessions(t *testing.T, secret, previous []byte, ttl time.Duration) *Sessions {
-	t.Helper()
-	s, err := NewSessions(secret, previous, ttl)
-	if err != nil {
-		t.Fatalf("NewSessions: %v", err)
-	}
-	return s
-}
-
-func TestNewSessions_RejectsWeakInput(t *testing.T) {
-	short := bytes.Repeat([]byte("k"), MinSecretLen-1)
-	cases := map[string]struct {
-		secret, previous []byte
-		ttl              time.Duration
-	}{
-		"short secret":          {short, nil, time.Hour},
-		"short previous secret": {testSecret, short, time.Hour},
-		"no secret":             {nil, nil, time.Hour},
-		"zero ttl":              {testSecret, nil, 0},
-		"negative ttl":          {testSecret, nil, -time.Hour},
-	}
-	for name, tc := range cases {
-		if _, err := NewSessions(tc.secret, tc.previous, tc.ttl); err == nil {
-			t.Errorf("%s: NewSessions accepted it", name)
+		// base64 of 32 bytes, unpadded. The cookie carries this verbatim, so a
+		// character needing escaping would be a bug that only shows up in a
+		// browser.
+		if len(token) != 43 {
+			t.Errorf("token %q is %d characters, want 43", token, len(token))
+		}
+		if strings.ContainsAny(token, "+/=") {
+			t.Errorf("token %q is not URL-safe", token)
 		}
 	}
 }
 
-func TestSession_RoundTrips(t *testing.T) {
-	s := newTestSessions(t, testSecret, nil, time.Hour)
-	now := time.Now()
+func TestIssueSession_StoresOnlyTheHash(t *testing.T) {
+	s, pool, ctx := newStore(t)
+	u := mustCreate(t, s, ctx, "owner@example.com", "correct horse battery", RoleOwner)
 
-	value, err := s.Issue(now)
+	token, sess, err := s.IssueSession(ctx, u.ID, time.Hour)
 	if err != nil {
-		t.Fatalf("Issue: %v", err)
+		t.Fatalf("IssueSession: %v", err)
+	}
+	if token == "" {
+		t.Fatal("IssueSession returned an empty token")
+	}
+	if sess.UserID != u.ID {
+		t.Errorf("session UserID = %q, want %q", sess.UserID, u.ID)
+	}
+	if time.Until(sess.ExpiresAt) < 55*time.Minute {
+		t.Errorf("ExpiresAt = %s, want about an hour out", sess.ExpiresAt)
 	}
 
-	expiry, err := s.Verify(value, now)
-	if err != nil {
-		t.Fatalf("Verify: %v", err)
+	// The point of the whole design: the token is not in the database. A leaked
+	// backup must not hand over anybody's live session.
+	var stored []byte
+	if err := pool.QueryRow(ctx, `SELECT token_hash FROM admin_sessions`).Scan(&stored); err != nil {
+		t.Fatalf("read token_hash: %v", err)
 	}
-	// Whole seconds: the expiry is carried as a unix timestamp.
-	if want := now.Add(time.Hour).Truncate(time.Second); !expiry.Equal(want) {
-		t.Errorf("expiry = %s, want %s", expiry, want)
+	if strings.Contains(string(stored), token) {
+		t.Error("the plain token is in the admin_sessions row")
 	}
-
-	if _, err := s.Verify(value, now.Add(59*time.Minute)); err != nil {
-		t.Errorf("Verify before expiry: %v", err)
-	}
-	if _, err := s.Verify(value, now.Add(time.Hour+2*time.Second)); !errors.Is(err, ErrExpired) {
-		t.Errorf("Verify after expiry = %v, want ErrExpired", err)
+	want := sha256.Sum256([]byte(token))
+	if string(stored) != string(want[:]) {
+		t.Errorf("token_hash = %x, want sha256(token) = %x", stored, want)
 	}
 }
 
-func TestVerify_RejectsForgeries(t *testing.T) {
-	s := newTestSessions(t, testSecret, nil, time.Hour)
-	now := time.Now()
+func TestSession_RoundTrip(t *testing.T) {
+	s, _, ctx := newStore(t)
+	u := mustCreate(t, s, ctx, "owner@example.com", "correct horse battery", RoleOwner)
 
-	value, err := s.Issue(now)
+	token, _, err := s.IssueSession(ctx, u.ID, time.Hour)
 	if err != nil {
-		t.Fatalf("Issue: %v", err)
+		t.Fatalf("IssueSession: %v", err)
 	}
 
-	// The encoded form is base64 over "timestamp|payload|mac", so there is no
-	// separately submittable payload to strip — truncating or flipping a byte is
-	// what tampering actually looks like here.
+	sess, got, err := s.Session(ctx, token)
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+	if sess.UserID != u.ID {
+		t.Errorf("session UserID = %q, want %q", sess.UserID, u.ID)
+	}
+	// The account travels with the session, because every caller needs both and
+	// because the user's current state is what makes a session revocable.
+	if got.ID != u.ID || got.Email != u.Email || got.Role != RoleOwner {
+		t.Errorf("user = %+v, want the owner %q", got, u.Email)
+	}
+}
+
+func TestSession_RejectsUnknownEmptyAndExpired(t *testing.T) {
+	s, pool, ctx := newStore(t)
+	u := mustCreate(t, s, ctx, "owner@example.com", "correct horse battery", RoleOwner)
+
+	live, _, err := s.IssueSession(ctx, u.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("IssueSession: %v", err)
+	}
+	expired, _, err := s.IssueSession(ctx, u.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("IssueSession: %v", err)
+	}
+	// Aged past its expiry rather than issued with a nanosecond TTL, so the test
+	// does not depend on how fast the machine running it is.
+	if _, err := pool.Exec(ctx,
+		`UPDATE admin_sessions SET expires_at = now() - interval '1 second' WHERE token_hash = $1`,
+		hashToken(expired)); err != nil {
+		t.Fatalf("age the session: %v", err)
+	}
+
 	cases := map[string]string{
-		"empty":        "",
-		"garbage":      "not-a-cookie",
-		"truncated":    value[:len(value)-4],
-		"flipped byte": flipLast(value),
+		"empty":   "",
+		"unknown": "not-a-token-anybody-issued",
+		// Expiry is enforced in the lookup's predicate, not by the sweep: between
+		// two sweeps the table is full of expired rows, and a lookup that returned
+		// them would authenticate every one.
+		"expired": expired,
 	}
-	for name, bad := range cases {
-		if _, err := s.Verify(bad, now); err == nil {
-			t.Errorf("%s: Verify accepted %q", name, bad)
+	for name, token := range cases {
+		if _, _, err := s.Session(ctx, token); !errors.Is(err, ErrNotFound) {
+			t.Errorf("%s: Session error = %v, want ErrNotFound", name, err)
 		}
 	}
 
-	// Another deployment's cookie, or one signed with a rotated-out key.
-	other := newTestSessions(t, otherKey, nil, time.Hour)
-	otherValue, err := other.Issue(now)
+	// And the live one still works, so the cases above failed for their own
+	// reasons rather than because nothing works.
+	if _, _, err := s.Session(ctx, live); err != nil {
+		t.Errorf("the live session broke too: %v", err)
+	}
+}
+
+func TestIssueSession_RefusesNonPositiveTTL(t *testing.T) {
+	s, _, ctx := newStore(t)
+	u := mustCreate(t, s, ctx, "owner@example.com", "correct horse battery", RoleOwner)
+
+	for _, ttl := range []time.Duration{0, -time.Hour} {
+		if _, _, err := s.IssueSession(ctx, u.ID, ttl); err == nil {
+			t.Errorf("IssueSession with ttl %s was accepted", ttl)
+		}
+	}
+	// Refused rather than clamped, and refused before writing: a session created
+	// already expired is a sign-in that silently does not work.
+	if n, err := s.CountSessionsForUser(ctx, u.ID); err != nil || n != 0 {
+		t.Errorf("sessions = %d (err %v), want none written", n, err)
+	}
+}
+
+func TestDeleteSession(t *testing.T) {
+	s, _, ctx := newStore(t)
+	u := mustCreate(t, s, ctx, "owner@example.com", "correct horse battery", RoleOwner)
+
+	token, _, err := s.IssueSession(ctx, u.ID, time.Hour)
 	if err != nil {
-		t.Fatalf("Issue: %v", err)
+		t.Fatalf("IssueSession: %v", err)
 	}
-	if _, err := s.Verify(otherValue, now); err == nil {
-		t.Error("a session signed with another secret was accepted")
-	}
-
-	// The genuine value still works, so none of the above was a false pass.
-	if _, err := s.Verify(value, now); err != nil {
-		t.Errorf("the genuine value stopped verifying: %v", err)
-	}
-}
-
-func TestVerify_MACCoversTheCookieName(t *testing.T) {
-	// securecookie signs the name along with the value, so a value lifted from
-	// a different cookie of ours could not be replayed as a session. Prove the
-	// property holds by verifying under a different name.
-	s := newTestSessions(t, testSecret, nil, time.Hour)
-	now := time.Now()
-
-	value, err := s.Issue(now)
+	other, _, err := s.IssueSession(ctx, u.ID, time.Hour)
 	if err != nil {
-		t.Fatalf("Issue: %v", err)
+		t.Fatalf("IssueSession: %v", err)
 	}
 
-	var payload string
-	if err := decodeUnderName("some_other_cookie", value, &payload, testSecret); err == nil {
-		t.Error("the session value verified under a different cookie name")
+	if err := s.DeleteSession(ctx, token); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if _, _, err := s.Session(ctx, token); !errors.Is(err, ErrNotFound) {
+		t.Errorf("the deleted session still resolves: %v", err)
+	}
+	// Signing out of one browser must not sign the account out of the others.
+	if _, _, err := s.Session(ctx, other); err != nil {
+		t.Errorf("the other session died too: %v", err)
+	}
+
+	// Idempotent: a double-submitted sign-out and one carrying an already-expired
+	// cookie both arrive here, and neither is a problem worth reporting to
+	// somebody who has just left.
+	if err := s.DeleteSession(ctx, token); err != nil {
+		t.Errorf("deleting a gone session: %v", err)
+	}
+	if err := s.DeleteSession(ctx, ""); err != nil {
+		t.Errorf("deleting an empty token: %v", err)
 	}
 }
 
-func TestSession_PreviousSecretVerifiesButDoesNotSign(t *testing.T) {
-	now := time.Now()
+func TestSetPassword_EndsSessionsIssuedByIssueSession(t *testing.T) {
+	// The store tests already cover "SetPassword deletes the rows"; this covers
+	// the pairing that matters at runtime — a token handed to a browser stops
+	// resolving the moment the password behind it changes.
+	s, _, ctx := newStore(t)
+	u := mustCreate(t, s, ctx, "owner@example.com", "correct horse battery", RoleOwner)
 
-	// Before rotation: a session signed with the old secret.
-	old := newTestSessions(t, otherKey, nil, time.Hour)
-	oldValue, err := old.Issue(now)
+	token, _, err := s.IssueSession(ctx, u.ID, time.Hour)
 	if err != nil {
-		t.Fatalf("Issue: %v", err)
+		t.Fatalf("IssueSession: %v", err)
 	}
-
-	// After rotation: new secret signs, old secret still verifies, so the
-	// operator is not signed out by a deploy.
-	rotated := newTestSessions(t, testSecret, otherKey, time.Hour)
-	if _, err := rotated.Verify(oldValue, now); err != nil {
-		t.Errorf("a session from the previous secret was rejected: %v", err)
+	if err := s.SetPassword(ctx, u.ID, hash(t, "a different long passphrase"), true); err != nil {
+		t.Fatalf("SetPassword: %v", err)
 	}
-
-	newValue, err := rotated.Issue(now)
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
+	if _, _, err := s.Session(ctx, token); !errors.Is(err, ErrNotFound) {
+		t.Errorf("the session survived a password change: %v", err)
 	}
-	if _, err := rotated.Verify(newValue, now); err != nil {
-		t.Errorf("a freshly issued session does not verify: %v", err)
-	}
-	// New sessions must be signed with the new secret only: once the previous
-	// secret is dropped from the config, they have to keep working.
-	current := newTestSessions(t, testSecret, nil, time.Hour)
-	if _, err := current.Verify(newValue, now); err != nil {
-		t.Errorf("a session issued after rotation was signed with the old secret: %v", err)
-	}
-	if _, err := old.Verify(newValue, now); err == nil {
-		t.Error("a session issued after rotation still verifies under the old secret alone")
-	}
-}
-
-func TestTTL(t *testing.T) {
-	s := newTestSessions(t, testSecret, nil, 3*time.Hour)
-	if s.TTL() != 3*time.Hour {
-		t.Errorf("TTL() = %s, want 3h", s.TTL())
-	}
-}
-
-// Password tests live in password_test.go.
-
-// decodeUnderName verifies a cookie value as if it had come from a differently
-// named cookie, which is what the name-binding test needs and the package's own
-// API deliberately does not expose.
-func decodeUnderName(name, value string, dst *string, secret []byte) error {
-	return securecookie.DecodeMulti(name, value, dst, securecookie.New(secret, nil))
-}
-
-func flipLast(s string) string {
-	if s == "" {
-		return s
-	}
-	b := []byte(s)
-	if b[len(b)-1] == 'A' {
-		b[len(b)-1] = 'B'
-	} else {
-		b[len(b)-1] = 'A'
-	}
-	return string(b)
 }

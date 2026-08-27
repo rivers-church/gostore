@@ -1,0 +1,64 @@
+{{define "content"}}
+
+<h1>Set up {{.StoreName}}</h1>
+
+<p>There is no administrator account yet. The server printed a one-time setup token
+to its log when it started — <code>docker compose logs server</code>, or wherever
+this deployment's logs go — and it is what authorises this first account.</p>
+
+<form method="post" action="/admin/setup">
+  {{template "csrf" .CSRFToken}}
+
+  <fieldset class="panel">
+    <legend>Setup token</legend>
+    <div class="field">
+      <label for="token">Token</label>
+      {{/* Never re-filled after a failed attempt: it is a credential, and a value
+           the browser remembers is one that turns up in form history and in a
+           screenshot of this page. */}}
+      <input id="token" name="token" autocomplete="off" spellcheck="false" autofocus required>
+      {{template "err" index .Errors "token"}}
+    </div>
+  </fieldset>
+
+  <fieldset class="panel">
+    <legend>Your account</legend>
+    <div class="field">
+      <label for="email">Email</label>
+      <input id="email" type="email" name="email" value="{{.Email}}"
+             autocomplete="username" autocapitalize="none" required>
+      {{template "err" index .Errors "email"}}
+    </div>
+    <div class="field">
+      <label for="name">Name</label>
+      <input id="name" name="name" value="{{.Name}}" autocomplete="name">
+      {{template "err" index .Errors "name"}}
+      <small class="hint">Optional. Shown instead of your address wherever the admin
+      names you.</small>
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" type="password" name="password" autocomplete="new-password" required>
+      {{template "err" index .Errors "password"}}
+      <small class="hint">At least 12 characters. Length is the only rule: a short
+      passphrase beats a mangled word.</small>
+    </div>
+    <div class="field">
+      <label for="password_confirm">Confirm password</label>
+      <input id="password_confirm" type="password" name="password_confirm"
+             autocomplete="new-password" required>
+      {{template "err" index .Errors "password_confirm"}}
+    </div>
+  </fieldset>
+
+  <div class="actions">
+    <button type="submit">Create administrator</button>
+  </div>
+</form>
+
+<p><small>This account is the store's <strong>owner</strong>: it can create other
+administrators, and it cannot be disabled or demoted while it is the only enabled
+owner. The setup token is spent the moment this succeeds, and this page stops
+existing.</small></p>
+
+{{end}}

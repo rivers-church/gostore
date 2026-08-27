@@ -81,15 +81,16 @@ services:
       CURRENCY: ${CURRENCY:-ZAR}
       LOG_LEVEL: ${LOG_LEVEL:-debug}
       LOG_FORMAT: ${LOG_FORMAT:-json}
-      # Development credentials, published on purpose so `make up` yields a
-      # working admin: the password is "gostore". Both values MUST be replaced
-      # for any deployment anyone else can reach — see the README.
+      # No admin credential here, on purpose, and none defaulted either: a
+      # published default password is a real CVE class, and worse in a file
+      # adopters copy. The first start against an empty database prints a
+      # one-time setup token —
       #
-      # argon2id, in the standard PHC encoding. Every `$` is doubled because
-      # compose would otherwise try to interpolate it. A `$2a$` bcrypt hash from
-      # an older deployment still verifies, so upgrading needs no change here.
-      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH:-$$argon2id$$v=19$$m=65536,t=3,p=4$$yfEWKr5x66MgQhGsKGkGqQ$$pzrCItWG+8g7Gv9rpUaBuG2vnTquuRCC0KU+fafR9T4}
-      SESSION_SECRET: ${SESSION_SECRET:-ZGV2ZWxvcG1lbnQtb25seS1zZXNzaW9uLXNlY3JldC0wMDA=}
+      #   docker compose logs server | grep setup_token
+      #
+      # — which /admin/setup exchanges for the first administrator. SETUP_TOKEN
+      # can supply that token instead, for a deploy with nobody reading logs.
+      SETUP_TOKEN: ${SETUP_TOKEN:-}
       # PayFast's own published sandbox credentials, so `make up` yields a
       # working checkout. They are in PayFast's documentation and take no real
       # money — but PAYFAST_SANDBOX must stay true for that to remain the case.
