@@ -123,6 +123,12 @@ body {
     align-items: center;
     gap: var(--gap-md);
     font-size: var(--text-small);
+    /* The admin nav grew a fifth link with the accounts pages, which is one
+       more than fits a 390px phone in a row. Wrapping rather than scrolling:
+       these are five short words, and a horizontally scrolling header is a
+       navigation people do not find. */
+    flex-wrap: wrap;
+    row-gap: var(--gap-sm);
 
     a {
       color: var(--ink-soft);
@@ -788,6 +794,36 @@ button,
   color: var(--warn);
   font-size: var(--text-small);
   margin-block: var(--gap-xs) 0;
+}
+
+/* The facts about one administrator: a definition list rather than a table,
+   because it is one record and not a set of them. Two columns while there is
+   room for them, stacked when there is not. */
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--gap-xs) var(--gap);
+  margin: 0;
+
+  > dt {
+    color: var(--ink-soft);
+  }
+
+  > dd {
+    margin: 0;
+    /* An address has no spaces to break at, and the grid must not widen past
+       the screen because of one. */
+    overflow-wrap: anywhere;
+  }
+
+  @media (width < 30rem) {
+    grid-template-columns: 1fr;
+    gap: 0 0;
+
+    > dt {
+      margin-block-start: var(--gap-sm);
+    }
+  }
 }
 
 .notice {

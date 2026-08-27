@@ -2,7 +2,7 @@
 
 <div class="page-head">
   <h1>Categories</h1>
-  <a class="button" href="/admin/categories/new">New category</a>
+  {{if .Can "catalog.write"}}<a class="button" href="/admin/categories/new">New category</a>{{end}}
 </div>
 
 {{/*
@@ -27,7 +27,7 @@
         <td>{{.Name}}</td>
         <td><code>{{.Slug}}</code></td>
         <td class="num">{{.Position}}</td>
-        <td><a href="/admin/categories/{{.ID}}/edit">Edit</a></td>
+        <td>{{if $.Can "catalog.write"}}<a href="/admin/categories/{{.ID}}/edit">Edit</a>{{end}}</td>
       </tr>
     {{end}}
     </tbody>

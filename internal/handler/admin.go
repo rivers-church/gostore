@@ -294,6 +294,32 @@ func (h *Handler) RegisterAdmin(mux *http.ServeMux, protect middleware.Middlewar
 	// why they do not break the read-only rule the order pages otherwise keep.
 	admin("POST /admin/orders/{id}/entitlements/{entitlementID}/revoke", auth.PermOrdersWrite, h.adminEntitlementRevoke)
 	admin("POST /admin/orders/{id}/entitlements/{entitlementID}/restore", auth.PermOrdersWrite, h.adminEntitlementRestore)
+	// Administrator accounts. See internal/handler/admin_users.go — accounts are
+	// disabled, never deleted, and nobody may change their own role, disable
+	// themselves, or reset their own password from these pages.
+	admin("GET /admin/users", auth.PermUsersWrite, h.adminUserList)
+	admin("GET /admin/users/new", auth.PermUsersWrite, h.adminUserNew)
+	admin("POST /admin/users", auth.PermUsersWrite, h.adminUserCreate)
+	admin("GET /admin/users/{id}/edit", auth.PermUsersWrite, h.adminUserEdit)
+	admin("POST /admin/users/{id}/role", auth.PermUsersWrite, h.adminUserRole)
+	admin("POST /admin/users/{id}/disabled", auth.PermUsersWrite, h.adminUserDisabled)
+	admin("POST /admin/users/{id}/password", auth.PermUsersWrite, h.adminUserPasswordReset)
+	// Your own password: PermRead, because every role has one, and written as
+	// passwordPath because requirePerm exempts exactly this path from the
+	// forced-change bounce. Two strings that had to match would eventually not.
+	admin("GET "+passwordPath, auth.PermRead, h.adminPasswordForm)
+	// Rate limited for the same reason the login POST is: it verifies a secret.
+	// Inside the session check rather than outside it, so the allowance is spent
+	// by signed-in administrators rather than by anyone who can reach the door.
+	admin("POST "+passwordPath, auth.PermRead, rateLimited(h.limits.login, h.adminPasswordChange))
+}
+
+// rateLimited puts a limiter in front of one handler, in the shape the route
+// closure takes. The limiters are middleware because most of them wrap a route
+// registered directly on the mux; this is the adapter for the ones registered
+// through admin().
+func rateLimited(limit middleware.Middleware, next http.HandlerFunc) http.HandlerFunc {
+	return limit(next).ServeHTTP
 }
 
 // page is what every rendered page needs regardless of what it shows. It is
@@ -341,6 +367,10 @@ func (p page) Can(perm string) (bool, error) {
 
 func (h *Handler) newPage(r *http.Request, title string) page {
 	user, _ := middleware.AdminUser(r)
+	// No template needs the hash, and every admin page would otherwise carry the
+	// signed-in operator's argon2 hash in its render data — one careless
+	// {{printf "%+v" .}} away from being on the page.
+	user.PasswordHash = ""
 	return page{
 		Title:     title,
 		StoreName: h.cfg.StoreName,

@@ -123,17 +123,20 @@
             <span class="badge done">active</span>
           {{end}}
         </td>
+        {{/* Absent for a role that may read an order but not change what it grants. */}}
         <td>
-          {{if .Revoked}}
-          <form method="post" action="/admin/orders/{{$.Order.ID}}/entitlements/{{.ID}}/restore">
-            {{template "csrf" $.CSRFToken}}
-            <button type="submit">Restore</button>
-          </form>
-          {{else}}
-          <form method="post" action="/admin/orders/{{$.Order.ID}}/entitlements/{{.ID}}/revoke">
-            {{template "csrf" $.CSRFToken}}
-            <button class="quiet" type="submit">Revoke</button>
-          </form>
+          {{if $.Can "orders.write"}}
+            {{if .Revoked}}
+            <form method="post" action="/admin/orders/{{$.Order.ID}}/entitlements/{{.ID}}/restore">
+              {{template "csrf" $.CSRFToken}}
+              <button type="submit">Restore</button>
+            </form>
+            {{else}}
+            <form method="post" action="/admin/orders/{{$.Order.ID}}/entitlements/{{.ID}}/revoke">
+              {{template "csrf" $.CSRFToken}}
+              <button class="quiet" type="submit">Revoke</button>
+            </form>
+            {{end}}
           {{end}}
         </td>
       </tr>

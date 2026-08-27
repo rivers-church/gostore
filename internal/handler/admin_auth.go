@@ -22,6 +22,17 @@ type loginPage struct {
 	// Next is where to go after signing in, already sanitised. It is rendered as
 	// a hidden field rather than kept in the URL so the POST carries it too.
 	Next string
+
+	// Notice is why they are back here, looked up from a fixed map by code — a
+	// changed password ends every session, and arriving at a login form with no
+	// explanation looks like the store signed you out for no reason.
+	Notice string
+}
+
+// loginNotices are the reasons the login page can give for being where it is.
+// Codes, not text: nothing from the query string is rendered.
+var loginNotices = map[string]string{
+	"password_changed": "Password changed. Sign in with the new one.",
 }
 
 type setupPage struct {
@@ -54,8 +65,9 @@ func (h *Handler) adminLoginForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.render(w, r, http.StatusOK, "admin_login", loginPage{
-		page: h.newPage(r, "Sign in"),
-		Next: safeNext(r.URL.Query().Get("next")),
+		page:   h.newPage(r, "Sign in"),
+		Next:   safeNext(r.URL.Query().Get("next")),
+		Notice: noticeFor(r, loginNotices),
 	})
 }
 

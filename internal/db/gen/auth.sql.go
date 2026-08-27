@@ -47,6 +47,20 @@ func (q *Queries) CountAdminUsers(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const countEnabledOwners = `-- name: CountEnabledOwners :one
+SELECT count(*) FROM admin_users WHERE role = 'owner' AND NOT disabled
+`
+
+// What the last-owner guards count, asked out loud. The account pages use it to
+// leave out the buttons those guards would refuse — presentation only: the guard
+// in the UPDATE is what actually holds, and this is read without the lock.
+func (q *Queries) CountEnabledOwners(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countEnabledOwners)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createAdminSession = `-- name: CreateAdminSession :exec
 INSERT INTO admin_sessions (token_hash, user_id, expires_at)
 VALUES ($1, $2, $3)

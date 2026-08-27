@@ -11,6 +11,12 @@ SELECT count(*) FROM admin_users;
 -- name: ListAdminUsers :many
 SELECT * FROM admin_users ORDER BY lower(email);
 
+-- name: CountEnabledOwners :one
+-- What the last-owner guards count, asked out loud. The account pages use it to
+-- leave out the buttons those guards would refuse — presentation only: the guard
+-- in the UPDATE is what actually holds, and this is read without the lock.
+SELECT count(*) FROM admin_users WHERE role = 'owner' AND NOT disabled;
+
 -- name: GetAdminUser :one
 SELECT * FROM admin_users WHERE id = $1;
 

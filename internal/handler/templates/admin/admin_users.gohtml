@@ -1,0 +1,44 @@
+{{define "content"}}
+
+<div class="page-head">
+  <h1>Administrators</h1>
+  <a class="button" href="/admin/users/new">New administrator</a>
+</div>
+
+{{if .Notice}}<p class="notice">{{.Notice}}</p>{{end}}
+
+{{/*
+  Disabled accounts are listed with everyone else, because this page is also how
+  one is switched back on. There is no delete: the row is who did what to the
+  catalog and the orders, and that outlives the account.
+*/}}
+<div class="scroll-x">
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Last signed in</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {{range .Users}}
+      <tr>
+        <td>{{.Display}}</td>
+        <td><code>{{.Email}}</code></td>
+        <td>{{.Role.Label}}</td>
+        <td>
+          {{if .Disabled}}<span class="badge problem">Disabled</span>
+          {{else if .MustChangePassword}}<span class="badge">Must change password</span>
+          {{else}}<span class="badge done">Active</span>{{end}}
+        </td>
+        <td>{{if .LastLoginAt.IsZero}}<span class="muted">Never</span>{{else}}{{.LastLoginAt.Format "2 Jan 2006, 15:04"}}{{end}}</td>
+        <td><a href="/admin/users/{{.ID}}/edit">Manage</a></td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+</div>
+
+<p class="hint"><small>An account is never deleted, only disabled — disabling ends
+its sessions immediately and leaves everything it did in place.</small></p>
+
+{{end}}

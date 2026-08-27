@@ -1,7 +1,11 @@
 {{define "content"}}
 
 <h1>Products</h1>
-<p><a href="/admin/products/new">New product</a></p>
+{{/*
+  Left out for a role that cannot create one, rather than rendered as a link to a
+  403. requirePerm is what refuses it; this only keeps the page honest.
+*/}}
+{{if .Can "catalog.write"}}<p><a href="/admin/products/new">New product</a></p>{{end}}
 
 {{if not .Products}}
   <p>No products yet.</p>
@@ -21,7 +25,7 @@
       <td>{{len .Variants}}</td>
       <td>{{.TotalStock}}</td>
       <td>{{if .Active}}yes{{else}}no{{end}}</td>
-      <td><a href="/admin/products/{{.ID}}/edit">Edit</a></td>
+      <td>{{if $.Can "catalog.write"}}<a href="/admin/products/{{.ID}}/edit">Edit</a>{{end}}</td>
     </tr>
   {{end}}
   </tbody>

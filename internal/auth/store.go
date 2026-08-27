@@ -205,6 +205,21 @@ func (s *Store) Count(ctx context.Context) (int, error) {
 	return int(n), nil
 }
 
+// CountEnabledOwners is how many owners could still sign in — the number the
+// last-owner guards protect.
+//
+// For the account pages, which leave out the buttons those guards would refuse.
+// It is read without the lock and is therefore a hint, not a decision: by the
+// time a form built from it is submitted, another administrator may have
+// changed the answer. The guard in the UPDATE is what actually holds.
+func (s *Store) CountEnabledOwners(ctx context.Context) (int, error) {
+	n, err := s.q.CountEnabledOwners(ctx)
+	if err != nil {
+		return 0, translate(fmt.Errorf("auth: count enabled owners: %w", err))
+	}
+	return int(n), nil
+}
+
 // SetPassword replaces an account's password and ends every session it has,
 // in one transaction.
 //
@@ -485,10 +500,18 @@ func (s *Store) ClaimSetup(ctx context.Context, token, email, name, passwordHash
 		return User{}, translate(fmt.Errorf("auth: create first user: %w", err))
 	}
 
+	// Claiming signs them straight in, so the sign-in is recorded here too.
+	// Without it the account list says "Never" beside the account reading it,
+	// which is the one row a new operator is certain to check.
+	u := userOf(created)
+	if err := q.TouchAdminUserLogin(ctx, u.ID); err == nil {
+		u.LastLoginAt = time.Now()
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return User{}, fmt.Errorf("auth: commit: %w", err)
 	}
-	return userOf(created), nil
+	return u, nil
 }
 
 // ErrSetupClosed means the store has already been claimed. It is permanent: the

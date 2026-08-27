@@ -1,0 +1,106 @@
+{{define "content"}}
+
+<a class="back" href="/admin/users">← Administrators</a>
+<h1>{{.User.Display}}</h1>
+
+{{if .Notice}}<p class="notice">{{.Notice}}</p>{{end}}
+{{/*
+  A refusal the server made, rather than a problem with one field: changing your
+  own role, disabling yourself, or taking away the last owner who can sign in.
+  The controls for those are not rendered below, so seeing this means the form
+  was submitted from a page that has since gone stale.
+*/}}
+{{with index .Errors "form"}}<p class="notice problem">{{.}}</p>{{end}}
+
+<dl class="panel facts">
+  <dt>Email</dt><dd><code>{{.User.Email}}</code></dd>
+  <dt>Role</dt><dd>{{.User.Role.Label}}</dd>
+  <dt>Status</dt>
+  <dd>{{if .User.Disabled}}Disabled{{else}}Active{{end}}{{if .User.MustChangePassword}}
+      — must choose a new password before anything else opens{{end}}</dd>
+  <dt>Created</dt><dd>{{.User.CreatedAt.Format "2 Jan 2006"}}</dd>
+  <dt>Last signed in</dt>
+  <dd>{{if .User.LastLoginAt.IsZero}}Never{{else}}{{.User.LastLoginAt.Format "2 Jan 2006, 15:04"}}{{end}}</dd>
+</dl>
+
+{{if .Self}}
+  {{/*
+    Your own account. Every control here is something only somebody else may do
+    to you: a reset skips the current-password check, and an administrator who
+    can change their own role is not held by it.
+  */}}
+  <p class="notice">This is your own account. Change your password on
+  <a href="/admin/password">your password page</a>, which asks for the current
+  one. Your role and whether you are enabled are for another administrator to
+  change.</p>
+{{else}}
+
+  {{if .LastOwner}}
+    <p class="notice">This is the last owner who can still sign in, so they cannot
+    be disabled or moved to a lesser role — that would leave the admin with nobody
+    to open it. Make somebody else an owner first.</p>
+  {{else}}
+  <form class="panel" method="post" action="/admin/users/{{.User.ID}}/role">
+    {{template "csrf" .CSRFToken}}
+    <div class="field narrow">
+      <label for="role">Role</label>
+      <select id="role" name="role">
+        {{$current := .User.Role}}
+        {{range .Roles}}
+        <option value="{{.}}" {{if eq . $current}}selected{{end}}>{{.Label}}</option>
+        {{end}}
+      </select>
+      {{template "err" index .Errors "role"}}
+    </div>
+    <div class="actions">
+      <button type="submit">Change role</button>
+      <small>Changing a role ends their sessions, so the new one takes effect on
+      their next sign-in rather than whenever they happen to reload.</small>
+    </div>
+  </form>
+
+  <form class="panel" method="post" action="/admin/users/{{.User.ID}}/disabled">
+    {{template "csrf" .CSRFToken}}
+    {{/*
+      The state being asked for, not a flip of the state shown. Two people acting
+      on the same stale page would otherwise each land on the opposite of what
+      they clicked.
+    */}}
+    <input type="hidden" name="disabled" value="{{if .User.Disabled}}0{{else}}1{{end}}">
+    <div class="actions">
+      <button type="submit">{{if .User.Disabled}}Enable account{{else}}Disable account{{end}}</button>
+      <small>{{if .User.Disabled}}They will be able to sign in again.{{else}}Their
+      sessions end at once. Nothing they did is removed — accounts are disabled,
+      never deleted.{{end}}</small>
+    </div>
+  </form>
+  {{end}}
+
+  <form class="panel" method="post" action="/admin/users/{{.User.ID}}/password"
+        autocomplete="off">
+    {{template "csrf" .CSRFToken}}
+    <fieldset>
+      <legend>Reset password</legend>
+      <div class="field">
+        <label for="password">New password</label>
+        <input id="password" name="password" type="password" required
+               autocomplete="new-password">
+        {{template "err" index .Errors "password"}}
+      </div>
+      <div class="field">
+        <label for="password_confirm">Repeat password</label>
+        <input id="password_confirm" name="password_confirm" type="password" required
+               autocomplete="new-password">
+        {{template "err" index .Errors "password_confirm"}}
+      </div>
+      <div class="actions">
+        <button type="submit">Reset password</button>
+        <small>Ends every session they have, and asks them to choose their own
+        password the next time they sign in.</small>
+      </div>
+    </fieldset>
+  </form>
+
+{{end}}
+
+{{end}}

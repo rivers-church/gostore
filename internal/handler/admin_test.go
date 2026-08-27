@@ -750,16 +750,17 @@ func withToken(t *testing.T, srv *httptest.Server, form url.Values) url.Values {
 //
 // Which page depends on the store's state: the login form redirects away once
 // the client is signed in and once nobody has claimed the store yet, and the
-// setup page exists only in that second case. The product list is the third,
-// for a signed-in client — it carries the layout's sign-out form, so it has a
-// token for every role, including the ones that may not open a create form.
+// setup page exists only in that second case. Your own password form is the
+// third, for a signed-in client — it is the one admin page every role can open,
+// including an account being forced to change its password, which is bounced
+// away from all the others.
 func csrfToken(t *testing.T, srv *httptest.Server) string {
 	t.Helper()
 
 	res, body := get(t, srv, "/admin/login")
 	if res.StatusCode != http.StatusOK {
 		if res, body = get(t, srv, "/admin/setup"); res.StatusCode != http.StatusOK {
-			_, body = get(t, srv, "/admin/products")
+			_, body = get(t, srv, passwordPath)
 		}
 	}
 

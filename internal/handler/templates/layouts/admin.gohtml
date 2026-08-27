@@ -22,10 +22,17 @@
       <a href="/admin/products">Products</a>
       <a href="/admin/categories">Categories</a>
       <a href="/admin/orders">Orders</a>
+      {{/*
+        Hidden from a role that could not open it — presentation only, and the
+        route refuses the same request whatever this renders. See requirePerm.
+      */}}
+      {{if .Can "users.write"}}<a href="/admin/users">Users</a>{{end}}
       <a href="/products">Storefront</a>
     </nav>
     <form method="post" action="/admin/logout">
       {{template "csrf" .CSRFToken}}
+      {{/* Who you are signed in as, and the way to your own password. */}}
+      <a class="quiet" href="/admin/password">{{.User.Display}}</a>
       <button type="submit">Sign out</button>
     </form>
   </div>

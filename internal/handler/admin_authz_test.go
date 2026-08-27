@@ -66,6 +66,7 @@ func TestAdminRoutes_RolesGetTheirPermissions(t *testing.T) {
 		{auth.PermRead, http.MethodGet, "/admin/products", nil},
 		{auth.PermCatalogWrite, http.MethodPost, "/admin/products", url.Values{"title": {"A Product"}}},
 		{auth.PermCatalogWrite, http.MethodGet, "/admin/products/new", nil},
+		{auth.PermUsersWrite, http.MethodGet, "/admin/users", nil},
 		{
 			auth.PermOrdersWrite, http.MethodPost,
 			"/admin/orders/3f2504e0-4f89-41d3-9a0c-0305e82c3301/entitlements/9f2504e0-4f89-41d3-9a0c-0305e82c3301/revoke",
@@ -165,21 +166,27 @@ func TestAdminRoutes_MustChangePasswordBouncesEverything(t *testing.T) {
 	if _, err := s.users.Create(t.Context(), email, "Reset", cheapHash(t, testPassword), auth.RoleAdmin, true); err != nil {
 		t.Fatalf("create the account: %v", err)
 	}
-	// Taken before signing in, because every page that would carry one is about
-	// to redirect to a form that does not exist yet. nosurf validates a token
-	// against the client's cookie, which this jar keeps across the sign-in.
-	token := csrfToken(t, s.srv)
 	signInAs(t, s.srv, email, testPassword)
 
 	// Every route, not a sample: a forced change that let through the pages
-	// nobody thought of is decorative.
+	// nobody thought of is decorative. The exception is the change form itself,
+	// which is where they are being sent.
+	var sawPasswordPage bool
 	for _, route := range s.handler.AdminProtectedRoutes() {
 		path := route.TestPath()
+		if path == passwordPath {
+			sawPasswordPage = true
+			res, _ := get(t, s.srv, path)
+			if route.Method == http.MethodGet && res.StatusCode != http.StatusOK {
+				t.Errorf("GET %s while a change is forced = %d, want 200", path, res.StatusCode)
+			}
+			continue
+		}
 		var res *http.Response
 		if route.Method == http.MethodGet {
 			res, _ = get(t, s.srv, path)
 		} else {
-			res, _ = post(t, s.srv, path, url.Values{"title": {"Sneaky"}, "csrf_token": {token}})
+			res, _ = post(t, s.srv, path, url.Values{"title": {"Sneaky"}})
 		}
 		if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != passwordPath {
 			t.Errorf("%s %s = %d %q, want 303 to %s",
@@ -187,9 +194,13 @@ func TestAdminRoutes_MustChangePasswordBouncesEverything(t *testing.T) {
 		}
 	}
 
+	if !sawPasswordPage {
+		t.Errorf("no route at %s, so the bounce above sends everybody to a 404", passwordPath)
+	}
+
 	// And signing out still works, or an account in this state could only be
 	// left by closing the browser.
-	res, _ := post(t, s.srv, "/admin/logout", url.Values{"csrf_token": {token}})
+	res, _ := post(t, s.srv, "/admin/logout", nil)
 	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != "/admin/login" {
 		t.Errorf("sign out = %d %q", res.StatusCode, res.Header.Get("Location"))
 	}

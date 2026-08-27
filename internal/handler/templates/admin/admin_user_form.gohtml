@@ -1,0 +1,68 @@
+{{define "content"}}
+
+<a class="back" href="/admin/users">← Administrators</a>
+<h1>New administrator</h1>
+
+<form method="post" action="/admin/users" autocomplete="off">
+  {{template "csrf" .CSRFToken}}
+
+  <fieldset class="panel">
+    <legend>Account</legend>
+    <div class="field">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" value="{{.Form.Email}}" required
+             autocomplete="off">
+      {{template "err" index .Errors "email"}}
+      <small class="hint">This is what they sign in with.</small>
+    </div>
+    <div class="field">
+      <label for="name">Name</label>
+      <input id="name" name="name" value="{{.Form.Name}}" autocomplete="off">
+      {{template "err" index .Errors "name"}}
+    </div>
+    <div class="field narrow">
+      <label for="role">Role</label>
+      <select id="role" name="role">
+        {{$selected := .Form.Role}}
+        {{range .Roles}}
+        <option value="{{.}}" {{if eq . $selected}}selected{{end}}>{{.Label}}</option>
+        {{end}}
+      </select>
+      {{template "err" index .Errors "role"}}
+      <small class="hint">Owner and Administrator can do everything, including
+      managing accounts. Manager runs the catalog and the orders. Viewer can look
+      and change nothing.</small>
+    </div>
+  </fieldset>
+
+  {{/*
+    A starting password, not a permanent one: it is set by somebody else and
+    somebody else knows it, so the account is asked to change it before anything
+    else opens. autocomplete="new-password" keeps the browser from offering the
+    signed-in administrator's own credentials here.
+  */}}
+  <fieldset class="panel">
+    <legend>Starting password</legend>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" required
+             autocomplete="new-password">
+      {{template "err" index .Errors "password"}}
+    </div>
+    <div class="field">
+      <label for="password_confirm">Repeat password</label>
+      <input id="password_confirm" name="password_confirm" type="password" required
+             autocomplete="new-password">
+      {{template "err" index .Errors "password_confirm"}}
+    </div>
+    <small class="hint">They will have to choose their own the first time they
+    sign in, so this only has to reach them once.</small>
+  </fieldset>
+
+  <div class="actions">
+    <button type="submit">Create administrator</button>
+    <a class="button quiet" href="/admin/users">Cancel</a>
+  </div>
+</form>
+
+{{end}}
