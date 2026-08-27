@@ -84,6 +84,7 @@ type passwordPage struct {
 var userNotices = map[string]string{
 	"created":        "Administrator created. They will choose their own password the first time they sign in.",
 	"role_changed":   "Role changed. Their sessions have ended, so they will sign in again with the new one.",
+	"role_unchanged": "That is already their role. Nothing changed, and their sessions are untouched.",
 	"disabled":       "Account disabled and its sessions ended. Nothing they did has been removed.",
 	"enabled":        "Account enabled. They can sign in again.",
 	"password_reset": "Password reset and sessions ended. They must choose a new one when they next sign in.",
@@ -191,10 +192,24 @@ func (h *Handler) adminUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A role that is not one of the four is a bad submission rather than a
+	// state this account is in, so it is 422 with the message on the field —
+	// the same answer the create form gives — and not the 409 the guards use.
 	role := auth.Role(r.PostFormValue("role"))
 	if !role.Valid() {
-		h.refuseUserChange(w, r, user, "That is not one of the roles.")
+		errs := validate.FormErrors{}
+		errs.Add("role", "Choose one of the roles listed.")
+		h.renderUserEdit(w, r, http.StatusUnprocessableEntity, user, "", errs)
 		return
+	}
+
+	// Saving the form without touching the select changes nothing, and the store
+	// deliberately does not end their sessions for a no-op. The notice has to
+	// agree with that: "their sessions have ended" would be a lie told by the
+	// page that just failed to end them.
+	notice := "role_changed"
+	if role == user.Role {
+		notice = "role_unchanged"
 	}
 
 	if err := h.users.SetRole(r.Context(), user.ID, role); err != nil {
@@ -204,7 +219,7 @@ func (h *Handler) adminUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.logger(r).Info("administrator role changed", "user", user.ID, "role", role, "by", h.actorID(r))
-	http.Redirect(w, r, "/admin/users/"+user.ID+"/edit?notice=role_changed", http.StatusSeeOther)
+	http.Redirect(w, r, "/admin/users/"+user.ID+"/edit?notice="+notice, http.StatusSeeOther)
 }
 
 // adminUserDisabled switches an account off or back on.

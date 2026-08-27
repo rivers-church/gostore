@@ -164,6 +164,61 @@ func TestAdminUsers_RoleChangeEndsTheirSessions(t *testing.T) {
 	}
 }
 
+func TestAdminUsers_RoleChangeRefusesAnUnknownRoleAndReportsANoOp(t *testing.T) {
+	s := setupShop(t)
+	target := mustAccount(t, s, "manager@example.com", testPassword, auth.RoleManager)
+	if _, _, err := s.users.IssueSession(t.Context(), target.ID, time.Hour); err != nil {
+		t.Fatalf("IssueSession: %v", err)
+	}
+
+	// Not a role: a bad submission, so 422 with the message on the field, the
+	// same answer the create form gives — not the 409 the guards use.
+	res, body := post(t, s.srv, "/admin/users/"+target.ID+"/role", url.Values{"role": {"root"}})
+	if res.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("role=root = %d, want 422", res.StatusCode)
+	}
+	if !strings.Contains(body, "one of the roles listed") {
+		t.Error("the refusal does not name the field")
+	}
+
+	// The role they already have. The store does not end their sessions for a
+	// no-op, so the page must not claim it did.
+	res, _ = post(t, s.srv, "/admin/users/"+target.ID+"/role", url.Values{"role": {"manager"}})
+	if got, want := res.Header.Get("Location"), "/admin/users/"+target.ID+"/edit?notice=role_unchanged"; got != want {
+		t.Errorf("Location = %q, want %q", got, want)
+	}
+	if n, _ := s.users.CountSessionsForUser(t.Context(), target.ID); n != 1 {
+		t.Errorf("sessions after a no-op role change = %d, want the one they had", n)
+	}
+	_, body = get(t, s.srv, res.Header.Get("Location"))
+	if !strings.Contains(body, userNotices["role_unchanged"]) {
+		t.Error("the page does not say that nothing changed")
+	}
+}
+
+// An id that is not a uuid reaches Postgres as a syntax error, not as "no rows".
+// It has to arrive as a 404 rather than a 500 on every one of these routes.
+func TestAdminUsers_UnknownAccountIsNotFound(t *testing.T) {
+	s := setupShop(t)
+
+	const missing = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+	for _, id := range []string{"x", missing} {
+		if res, _ := get(t, s.srv, "/admin/users/"+id+"/edit"); res.StatusCode != http.StatusNotFound {
+			t.Errorf("GET /admin/users/%s/edit = %d, want 404", id, res.StatusCode)
+		}
+		for path, form := range map[string]url.Values{
+			"/role":     {"role": {"viewer"}},
+			"/disabled": {"disabled": {"1"}},
+			"/password": {"password": {newPassword}, "password_confirm": {newPassword}},
+		} {
+			res, _ := post(t, s.srv, "/admin/users/"+id+path, form)
+			if res.StatusCode != http.StatusNotFound {
+				t.Errorf("POST /admin/users/%s%s = %d, want 404", id, path, res.StatusCode)
+			}
+		}
+	}
+}
+
 func TestAdminUsers_DisableAndEnable(t *testing.T) {
 	s := setupShop(t)
 	target := mustAccount(t, s, "manager@example.com", testPassword, auth.RoleManager)

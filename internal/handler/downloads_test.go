@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/17xande-dev/gostore/internal/auth"
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/config"
 	"github.com/17xande-dev/gostore/internal/downloads"
@@ -193,6 +194,31 @@ func TestDownloads_TheRequirement_RevokingOneBuyerLeavesTheOther(t *testing.T) {
 	}
 	if res, _ := get(t, d.srv, "/downloads/"+alice+"/"+strconv.FormatInt(d.mp3.ID, 10)); res.StatusCode != http.StatusFound {
 		t.Errorf("after restoring = %d, want 302", res.StatusCode)
+	}
+
+	// The page those two POSTs come from, which nothing else renders with an
+	// entitlement on it: the buttons are there for a role that may use them and
+	// absent for one that may not.
+	res, body = get(t, d.srv, "/admin/orders/"+aliceOrder)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET the order = %d %s", res.StatusCode, body)
+	}
+	if !strings.Contains(body, "/entitlements/"+grants[0].ID+"/revoke") {
+		t.Error("the order page offers no way to revoke an entitlement")
+	}
+
+	mustAccount(t, d.shop, "viewer@example.com", testPassword, auth.RoleViewer)
+	signInAs(t, d.srv, "viewer@example.com", testPassword)
+	res, body = get(t, d.srv, "/admin/orders/"+aliceOrder)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET the order as a viewer = %d", res.StatusCode)
+	}
+	if strings.Contains(body, "/entitlements/") {
+		t.Error("a viewer is offered the revoke and restore buttons")
+	}
+	// Read-only, not shut out: the order itself is still theirs to look at.
+	if !strings.Contains(body, grants[0].ID) && !strings.Contains(body, "Conference 2026") {
+		t.Error("a viewer cannot see the order's contents")
 	}
 }
 
