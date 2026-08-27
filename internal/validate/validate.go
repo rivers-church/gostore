@@ -5,6 +5,7 @@ package validate
 
 import (
 	"fmt"
+	"net/mail"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -259,4 +260,68 @@ func maxLen(e FormErrors, field, value string, max int) {
 	if utf8.RuneCountInString(value) > max {
 		e.Add(field, "Too long.")
 	}
+}
+
+// MinPasswordLength is the shortest admin password accepted.
+//
+// Length is the only rule. Composition requirements ("one digit, one symbol")
+// push people towards short mangled words, while argon2id already makes an
+// offline guess expensive. Twelve characters admits a short passphrase, which is
+// what we would rather people chose.
+//
+// It is counted in runes, so a passphrase in a non-Latin script is measured the
+// way its writer would measure it rather than in UTF-8 bytes.
+const MinPasswordLength = 12
+
+// Password checks a new password and its confirmation, writing any problems into
+// e under "password" and "password_confirm".
+//
+// It takes the error map rather than returning its own so a caller validating a
+// whole form — email, name and password together — reports every problem in one
+// pass instead of making somebody fix them one page load at a time.
+func Password(e FormErrors, password, confirm string) {
+	switch {
+	case password == "":
+		e.Add("password", "Required.")
+	case utf8.RuneCountInString(password) < MinPasswordLength:
+		e.Add("password", fmt.Sprintf("Use at least %d characters.", MinPasswordLength))
+	}
+	// Only worth reporting once the password itself is acceptable — otherwise a
+	// blank pair produces two errors saying the same thing.
+	if _, bad := e["password"]; !bad && password != confirm {
+		e.Add("password_confirm", "The two passwords do not match.")
+	}
+}
+
+// AdminUser validates the account half of the new-administrator form. The
+// password is validated separately by Password, because resetting a password
+// reuses that half on its own.
+func AdminUser(email, name string) FormErrors {
+	e := FormErrors{}
+	required(e, "email", email)
+	if email != "" && !isEmail(email) {
+		e.Add("email", "Enter a valid email address.")
+	}
+	maxLen(e, "email", email, 320)
+	maxLen(e, "name", name, 200)
+	return e
+}
+
+// NormalizeEmail reduces an address to its addr-spec, so `Alex <a@example.com>`
+// is stored as `a@example.com`. It returns s trimmed but otherwise unchanged if
+// it does not parse.
+//
+// This is not cosmetic. mail.ParseAddress accepts RFC 5322's display-name form,
+// and an account stored under the whole string would be a second account for one
+// mailbox: it would not collide with the plain address under admin_users'
+// lower(email) unique index, so neither that nor auth.ErrEmailTaken would catch
+// it — and it could never sign in, because the login form's type=email input will
+// not accept the string back.
+func NormalizeEmail(s string) string {
+	s = strings.TrimSpace(s)
+	addr, err := mail.ParseAddress(s)
+	if err != nil {
+		return s
+	}
+	return addr.Address
 }

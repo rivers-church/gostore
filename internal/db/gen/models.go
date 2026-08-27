@@ -8,6 +8,32 @@ import (
 	"time"
 )
 
+type AdminSession struct {
+	TokenHash []byte
+	UserID    string
+	CreatedAt time.Time
+	ExpiresAt time.Time
+}
+
+type AdminSetup struct {
+	ID         bool
+	TokenHash  []byte
+	CreatedAt  time.Time
+	ConsumedAt *time.Time
+}
+
+type AdminUser struct {
+	ID                 string
+	Email              string
+	Name               string
+	PasswordHash       string
+	Role               string
+	Disabled           bool
+	MustChangePassword bool
+	CreatedAt          time.Time
+	LastLoginAt        *time.Time
+}
+
 type Cart struct {
 	ID        string
 	CreatedAt time.Time
