@@ -119,12 +119,19 @@ func TestHardening_OversoldOrderIsFlaggedInTheAdmin(t *testing.T) {
 	}
 
 	signIn(t, s.srv)
+	// The flag is matched without regard to case: it is a state badge, and its
+	// casing is a styling decision that has already changed once. The prose below
+	// it is matched as written, because that is the explanation an operator acts
+	// on rather than a label.
 	_, list := get(t, s.srv, "/admin/orders")
-	if !strings.Contains(list, "OVERSOLD") {
+	if !strings.Contains(strings.ToLower(list), "oversold") {
 		t.Errorf("the order list does not flag it: %s", list)
 	}
 	_, page := get(t, s.srv, "/admin/orders/"+order.ID)
-	for _, want := range []string{"OVERSOLD", "not enough stock", "fulfil this late or refund"} {
+	if !strings.Contains(strings.ToLower(page), "oversold") {
+		t.Errorf("the order page does not flag it: %s", page)
+	}
+	for _, want := range []string{"not enough stock", "fulfil this late or refund"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("the order page is missing %q", want)
 		}

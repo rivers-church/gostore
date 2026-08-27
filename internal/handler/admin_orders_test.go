@@ -129,7 +129,10 @@ func TestAdminOrders_PendingOrderIsNotShownAsPaid(t *testing.T) {
 	if !strings.Contains(body, "pending") {
 		t.Errorf("the page does not report the status: %s", body)
 	}
-	if !strings.Contains(body, "Confirmation email not sent") {
+	// Matched without regard to case: this is a state badge, and its casing is a
+	// styling decision that has already changed once. What matters is that the
+	// page says no confirmation went out, not how it is typeset.
+	if !strings.Contains(strings.ToLower(body), "confirmation email not sent") {
 		t.Errorf("the page does not report that no confirmation went out: %s", body)
 	}
 }
