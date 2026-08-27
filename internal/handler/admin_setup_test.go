@@ -271,3 +271,34 @@ func TestAdminSetup_NormalizesTheAddress(t *testing.T) {
 		t.Errorf("stored email = %q, want the addr-spec", user.Email)
 	}
 }
+
+// A store that cannot answer "has anybody claimed this yet?" gets one response,
+// not two.
+//
+// The check writes a 500 and tells its caller to stop; a caller that read the
+// answer as "not pending" instead would go on to write the 404 page — or the login
+// form — into the body of the error page it had already sent, and net/http would
+// log a superfluous WriteHeader on top.
+func TestAdminSetup_DatabaseOutageIsOneResponse(t *testing.T) {
+	for _, path := range []string{"/admin/setup", "/admin/login"} {
+		s := newUnclaimedStore(t)
+		setupToken(t, s)
+		// Taken away after the server is built, so construction succeeds and only
+		// the queries fail — what a database that goes away mid-life looks like.
+		s.pool.Close()
+
+		res, body := get(t, s.srv, path)
+		if res.StatusCode != http.StatusInternalServerError {
+			t.Errorf("GET %s during an outage = %d, want 500", path, res.StatusCode)
+		}
+		if strings.Contains(body, "Page not found") {
+			t.Errorf("GET %s appended the 404 page to the error page", path)
+		}
+		if strings.Contains(body, `name="token"`) || strings.Contains(body, `name="password"`) {
+			t.Errorf("GET %s appended a form to the error page", path)
+		}
+		if !strings.Contains(body, "Something went wrong") {
+			t.Errorf("GET %s = %s, want the error page", path, body)
+		}
+	}
+}

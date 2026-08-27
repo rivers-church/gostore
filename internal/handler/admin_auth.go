@@ -39,7 +39,11 @@ func (h *Handler) adminLoginForm(w http.ResponseWriter, r *http.Request) {
 	// Nobody has claimed this store yet: the login form is a dead end, and the
 	// claim page is where an operator needs to be. Checked before the cookie,
 	// because a session cannot exist while there are no accounts.
-	if h.setupPending(w, r) {
+	pending, ok := h.setupPending(w, r)
+	if !ok {
+		return
+	}
+	if pending {
 		http.Redirect(w, r, "/admin/setup", http.StatusSeeOther)
 		return
 	}
@@ -143,7 +147,11 @@ func (h *Handler) adminLogout(w http.ResponseWriter, r *http.Request) {
 // claimed. Nothing about a live deployment should advertise the shape of its
 // bootstrap.
 func (h *Handler) adminSetupForm(w http.ResponseWriter, r *http.Request) {
-	if !h.setupPending(w, r) {
+	pending, ok := h.setupPending(w, r)
+	if !ok {
+		return
+	}
+	if !pending {
 		h.notFound(w, r)
 		return
 	}
@@ -156,7 +164,11 @@ func (h *Handler) adminSetupForm(w http.ResponseWriter, r *http.Request) {
 // same kind of request: it verifies a secret, and an unlimited one is a token
 // worth guessing at.
 func (h *Handler) adminSetupClaim(w http.ResponseWriter, r *http.Request) {
-	if !h.setupPending(w, r) {
+	pending, ok := h.setupPending(w, r)
+	if !ok {
+		return
+	}
+	if !pending {
 		h.notFound(w, r)
 		return
 	}
@@ -226,20 +238,26 @@ func (h *Handler) renderSetup(w http.ResponseWriter, r *http.Request, status int
 	})
 }
 
-// setupPending answers whether the store is still claimable, having already
-// written a 500 if it could not find out.
+// setupPending answers whether the store is still claimable. The second return is
+// false when it could not find out, in which case the request has already been
+// answered with a 500 and the caller must return without writing anything more.
+//
+// Two returns rather than one, because "not pending" and "cannot tell" need
+// different responses and a single bool collapses them into the wrong one: every
+// caller would go on to write a page after the error page, which is a 500 with a
+// second document appended to it and a superfluous WriteHeader in the log.
 //
 // Failing closed on an error would 404 the setup page during a database blip and
 // leave an operator convinced the store was already claimed; failing open would
 // offer a claim form on a store that has administrators. Neither is a guess worth
 // making, so an error is an error.
-func (h *Handler) setupPending(w http.ResponseWriter, r *http.Request) bool {
+func (h *Handler) setupPending(w http.ResponseWriter, r *http.Request) (pending, ok bool) {
 	pending, err := h.users.SetupPending(r.Context())
 	if err != nil {
 		h.serverError(w, r, err)
-		return false
+		return false, false
 	}
-	return pending
+	return pending, true
 }
 
 // currentSession reports whether this request carries a live session, for the

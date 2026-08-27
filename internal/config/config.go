@@ -196,16 +196,16 @@ type Config struct {
 	LogFormat string
 }
 
-// payFastSandboxMerchantID is the merchant id PayFast publishes in its own
-// documentation for testing, and therefore the one every copy of this project's
-// .env.example and compose.yaml carries. It is a constant here so that "still on
-// the demo credentials" is something the config can recognise.
 // MinSetupTokenLen is the shortest SETUP_TOKEN accepted. The token is, for as
 // long as it is unclaimed, the credential for the whole admin area, so it is held
 // to the length 32 random bytes reach in base64 rather than to anything a person
 // would type.
 const MinSetupTokenLen = 32
 
+// payFastSandboxMerchantID is the merchant id PayFast publishes in its own
+// documentation for testing, and therefore the one every copy of this project's
+// .env.example and compose.yaml carries. It is a constant here so that "still on
+// the demo credentials" is something the config can recognise.
 const payFastSandboxMerchantID = "10000100"
 
 // PayFast is what the PayFast gateway needs from the environment. The merchant

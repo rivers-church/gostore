@@ -134,3 +134,67 @@ func TestEnsureSetupToken_IssuesNothingOnAClaimedStore(t *testing.T) {
 		t.Errorf("SetupPending = %v, %v, want false", pending, err)
 	}
 }
+
+// A SETUP_TOKEN that does not match the token already issued is inert — one row,
+// and it is not this one — so the log has to say that rather than pointing at an
+// earlier line that never printed anything.
+func TestEnsureSetupToken_SaysWhenASuppliedTokenIsIgnored(t *testing.T) {
+	users := auth.NewStore(dbtest.Pool(t))
+	ctx := t.Context()
+
+	log, buf := captureLogger()
+	if err := ensureSetupToken(ctx, users, "", log); err != nil {
+		t.Fatalf("first boot: %v", err)
+	}
+	generated := loggedToken(t, buf)
+
+	// The operator sets SETUP_TOKEN — or Terraform rotates it — and restarts.
+	log, buf = captureLogger()
+	supplied := strings.Repeat("s", 43)
+	if err := ensureSetupToken(ctx, users, supplied, log); err != nil {
+		t.Fatalf("second boot: %v", err)
+	}
+
+	if !strings.Contains(buf.String(), "does not match") {
+		t.Errorf("the log does not say the supplied token is ignored: %s", buf.String())
+	}
+	if strings.Contains(buf.String(), "look further back in this log") {
+		t.Error("the log points at an earlier line, which for a supplied token printed nothing")
+	}
+	if strings.Contains(buf.String(), supplied) {
+		t.Errorf("SETUP_TOKEN was written to the log: %s", buf.String())
+	}
+	// And the truth of it: the generated token still claims the store, the
+	// supplied one does not.
+	if ok, err := users.CheckSetupToken(ctx, generated); err != nil || !ok {
+		t.Errorf("the issued token stopped working: %v, %v", ok, err)
+	}
+	if ok, err := users.CheckSetupToken(ctx, supplied); err != nil || ok {
+		t.Errorf("CheckSetupToken(supplied) = %v, %v, want false", ok, err)
+	}
+}
+
+// The matching case is quiet about it: a deploy that supplies the same token on
+// every restart is the ordinary shape, and a warning per restart would train
+// somebody to ignore the one above.
+func TestEnsureSetupToken_QuietWhenASuppliedTokenIsAlreadyStored(t *testing.T) {
+	users := auth.NewStore(dbtest.Pool(t))
+	ctx := t.Context()
+	supplied := strings.Repeat("s", 43)
+
+	log, _ := captureLogger()
+	if err := ensureSetupToken(ctx, users, supplied, log); err != nil {
+		t.Fatalf("first boot: %v", err)
+	}
+	log, buf := captureLogger()
+	if err := ensureSetupToken(ctx, users, supplied, log); err != nil {
+		t.Fatalf("second boot: %v", err)
+	}
+
+	if strings.Contains(buf.String(), "does not match") {
+		t.Errorf("a restart with the same SETUP_TOKEN warned about it: %s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "will claim the first account") {
+		t.Errorf("the log says nothing useful on a restart: %s", buf.String())
+	}
+}

@@ -11,10 +11,11 @@ Stdlib-first, with a deliberately tiny dependency surface.
 > and pagination all work. What remains is the publishing checklist — see the build order
 > below.
 >
-> The compose stack ships a **published development password** (`gostore`) and PayFast's
-> **published sandbox credentials**, so `make up` gives you a working admin and a working
-> checkout. Replace them, along with `SESSION_SECRET`, before anyone else can reach the
-> deployment — see [Admin](#admin) and [Payments](#payments).
+> There is no default admin password. `make up` prints a one-time setup token, and
+> `/admin/setup` exchanges it for the first administrator account — see
+> [Admin](#admin). The compose stack does ship PayFast's **published sandbox
+> credentials**, so the checkout works out of the box; replace them before anyone else
+> can reach the deployment — see [Payments](#payments).
 
 ## Why
 
@@ -48,7 +49,7 @@ Other useful targets:
 | `make run` | Run the server on the host against the compose Postgres |
 | `make seed` | Load a products JSON file (`SEED_FILE=...`, default `testdata/products.json`) |
 | `make test` | Run every test, including the database-backed ones |
-| `make hashpw` | Prompt for a password and print `ADMIN_PASSWORD_HASH` + `SESSION_SECRET` |
+| `make hashpw` | Prompt for a password and print an argon2id hash — a lockout-recovery path, not part of setup |
 | `make psql` | Open a `psql` shell on the compose database |
 | `make logs` | Follow the server logs |
 | `make migrate` | Apply pending migrations without starting the server |
@@ -64,9 +65,7 @@ list with defaults.
 | Var | Required | Default | Purpose |
 |---|---|---|---|
 | `DATABASE_URL` | **yes** | — | Postgres connection string |
-| `ADMIN_PASSWORD_HASH` | **yes** | — | argon2id hash of the admin password (`make hashpw`); a bcrypt one still verifies |
-| `SESSION_SECRET` | **yes** | — | 32+ random bytes, base64, signs the session cookie |
-| `SESSION_SECRET_PREVIOUS` | no | — | The outgoing secret during a rotation; still verifies, never signs |
+| `SETUP_TOKEN` | no | generated | The one-time token that claims the first account. 32+ characters. Generated and logged on first boot if unset |
 | `SESSION_TTL_HOURS` | no | `24` | How long a sign-in lasts |
 | `PAYFAST_MERCHANT_ID` | **yes** | — | From the PayFast dashboard |
 | `PAYFAST_MERCHANT_KEY` | **yes** | — | From the PayFast dashboard |
@@ -141,41 +140,67 @@ anonymously readable.
 
 ## Admin
 
-The admin lives at `/admin`, behind one password. Generate the two values it needs:
+The admin lives at `/admin`. Accounts are rows in `admin_users`, not a credential in the
+environment: there is no `ADMIN_PASSWORD_HASH` and no default password to forget to change.
+
+**First run.** With no administrator in the database the server generates a one-time setup
+token and prints it:
 
 ```sh
-make hashpw            # prompts, echoes nothing, prints both vars
+docker compose logs server | grep setup_token
 ```
 
-Set them in the environment and restart. The plain password is never stored or
-configured — only its argon2id hash — so a leaked env file or a `ps` listing does not hand
-over the credential. See [Hardening](#password-hashing) for the parameters and for why a
-bcrypt hash from an older deployment still works.
+`/admin/setup` exchanges that token for the first account, which is an `owner`, and
+`/admin/login` redirects there while no account exists. The token is spent by the claim and
+the page stops existing — permanently: the consumed timestamp is never cleared, so a restart
+does not reopen it and neither does disabling every account. A deploy with nobody reading
+logs can supply `SETUP_TOKEN` instead, in which case nothing is printed; the Terraform stack
+generates one into Secret Manager and reads it with
+`gcloud secrets versions access latest --secret=gostore-setup-token`.
 
-**One operator, no sessions table.** A session is a cookie signed by
-[gorilla/securecookie](https://github.com/gorilla/securecookie) whose payload is the
-expiry. The expiry is inside the signed value, not just in the cookie's metadata, so a
-client cannot extend it, and the signature covers the cookie's name as well as its value.
-Verifying costs no database round trip and expired sessions need no cleanup job.
+The alternatives are both worse, and both common. A fixed default credential is a CVE class,
+especially in a project published for others to copy. An unguarded first-run wizard is a race
+that whoever finds the deployment first — before its operator does — wins.
 
-Rotating the secret does not sign you out: set `SESSION_SECRET` to the new value and
-`SESSION_SECRET_PREVIOUS` to the old one, deploy, and drop the previous value once
-`SESSION_TTL_HOURS` has passed. Existing sessions keep verifying; new ones are signed with
-the new secret only.
+**Sessions are rows, not signed cookies.** A sign-in inserts into `admin_sessions` and the
+cookie carries 32 bytes from `crypto/rand`. Only `sha256(token)` is stored, so a leaked
+backup hands over no live session, and there is no signing secret to configure or rotate.
 
-The trade is per-session revocation: there isn't any, short of rotating the secret without
-a previous value, which signs *everything* out. Wanting to revoke one session, or wanting a
-second admin with different permissions, is the documented point at which this should
-become a `sessions` table with a real user model — not something to bolt onto the cookie.
+The row is what makes a session revocable, which is the whole reason for the table: changing
+an account's password, disabling it, or changing its role deletes every session it holds in
+the same transaction, so the next request from that browser is anonymous rather than valid
+until the cookie happens to expire. Expiry is enforced in the lookup's own SQL predicate; the
+hourly sweep of expired rows keeps the table bounded and is explicitly not what makes it
+correct.
+
+The costs, stated plainly: one indexed lookup per admin request, and a session that outlives
+a `DELETE FROM admin_sessions` does not exist. Both are the price of being able to end one.
+
+If nobody can sign in at all — every owner disabled, or the only password lost — `make hashpw`
+prints a hash to set by hand. See [`cmd/hashpw`](cmd/hashpw/main.go) for the `UPDATE`, and for
+the `DELETE FROM admin_sessions` that has to go with it.
 
 Notes:
 
 - The cookie is `HttpOnly`, `SameSite=Lax`, scoped to `/admin`, and `Secure` whenever
   `BASE_URL` is `https://` — so it is never sent with the cookie-free embeddable catalog
   fragments.
+- Signing in replaces whatever session the browser arrived with, rather than adopting it.
+  That is session fixation: an attacker who can set a cookie plants a token and waits.
+- A redirect back to where you were going (`?next=`) is reduced by an allowlist — a path
+  under `/admin/`, no `//`, no CR/LF, no `..` — so it cannot send anybody off the site.
+- A session lookup that *fails* is a `500`, not a redirect to the login form. Answering
+  "please sign in" during a database outage sends an operator round a loop that cannot
+  complete, with the outage reported as an authentication problem.
 - htmx requests that have lost their session get `401` and `HX-Refresh: true` instead of a
   redirect, because swapping a login page into a fragment produces a broken hybrid.
-- Login is rate limited to 10 attempts a minute per IP; see [Hardening](#hardening).
+- Login and the setup claim are rate limited to 10 attempts a minute per IP; see
+  [Hardening](#hardening). The claim is limited because it verifies a secret, exactly as the
+  login does.
+- Roles (`owner`, `admin`, `manager`, `viewer`) and per-account `must_change_password` are in
+  the schema and in `internal/auth`, but **nothing enforces them yet** — every signed-in
+  account can currently reach every admin page. Authorization and the account-management
+  pages are the next two phases of the build order below.
 
 ## CSRF
 
@@ -262,17 +287,18 @@ $argon2id$v=19$m=65536,t=3,p=4$<salt>$<hash>
 Because the parameters live in the hash, raising them later needs no migration: existing
 hashes keep verifying at their own settings and the next `make hashpw` writes the new ones.
 
-**A bcrypt hash still verifies.** `CheckPassword` dispatches on the prefix, so an existing
-deployment's `ADMIN_PASSWORD_HASH` keeps working and moves to argon2id whenever the
-operator next runs `make hashpw`. New hashes are argon2id only.
+**A bcrypt hash still verifies.** `CheckPassword` dispatches on the prefix, so a hash
+carried over from an older deployment keeps working and moves to argon2id the next time that
+password is set. New hashes are argon2id only.
 
 Two details that are defence rather than decoration:
 
 - Verification **caps the memory a stored hash may request** at 1 GiB. Without that, a
-  mistyped `ADMIN_PASSWORD_HASH` claiming `m=4194304` would try to allocate four gibibytes
-  on the first login attempt — a denial of service delivered by a typo.
-- The hash is **parsed at boot**, so an unreadable one is a startup failure naming the
-  problem instead of an admin who can never sign in and nothing in the logs to say why.
+  hand-edited hash claiming `m=4194304` would try to allocate four gibibytes on the first
+  login attempt — a denial of service delivered by a typo.
+- A hash is **parsed on the way in**, by every store method that takes one, so a malformed
+  one is refused where the caller can say so rather than becoming an account that can never
+  sign in with nothing in the logs to explain it.
 
 ### Response headers
 
@@ -1328,7 +1354,6 @@ question is the depth of the problem, not the size of the dependency.
 | [`jackc/pgx/v5`](https://github.com/jackc/pgx) | Postgres driver and pool. No cgo, so the binary stays static |
 | [`pressly/goose/v3`](https://github.com/pressly/goose) | Migrations: advisory locking, `NO TRANSACTION` support, and a CLI for the day one needs hand-holding |
 | [`justinas/nosurf`](https://github.com/justinas/nosurf) | CSRF tokens and origin checks |
-| [`gorilla/securecookie`](https://github.com/gorilla/securecookie) | Signing the admin session cookie, including key rotation |
 | [`golang.org/x/crypto`](https://pkg.go.dev/golang.org/x/crypto) | `argon2` for admin password hashing, `bcrypt` to keep older hashes verifying |
 | [`golang.org/x/time`](https://pkg.go.dev/golang.org/x/time/rate) | The token bucket behind the rate limits |
 | [`wneessen/go-mail`](https://github.com/wneessen/go-mail) | Sending email: MIME, RFC 2047 subjects, quoted-printable, STARTTLS and implicit TLS |
@@ -1362,7 +1387,7 @@ Recorded here so they are decided deliberately rather than by default:
 
 | Decision | Candidate | When |
 |---|---|---|
-| Server-side sessions | [`alexedwards/scs`](https://github.com/alexedwards/scs) | Only if a second admin or immediate revocation is ever needed — the same trigger as adding a `sessions` table |
+| Server-side sessions | [`alexedwards/scs`](https://github.com/alexedwards/scs) | **Closed: not taken.** The trigger arrived and the answer was a hand-rolled `admin_sessions` table. scs keys an opaque blob by token with no user column, so "end every session belonging to this account" — the one operation that reopened the question — cannot be expressed against its schema without querying around the abstraction. Its other features (flash data, idle-vs-absolute timeouts) go unused here, and dropping the signed cookie removed a dependency rather than adding one |
 | `AND` category filtering | a second parameter, or a toggle in the filter form | When a shop's categories overlap enough that widening the results is the wrong default |
 | Accent-insensitive search | `unaccent`, behind an `IMMUTABLE` wrapper so it can be indexed | When a catalog carries accented titles and "cafe" failing to find "café" starts costing sales |
 | Keyset pagination | a cursor on the ranking and title | When a catalog is deep enough that discarding rows to reach a late page is measurable |
@@ -1575,7 +1600,7 @@ unchanged when a migration needs to be inspected or applied by hand.
 
 1. **Skeleton** — config, migration runner, compose, Dockerfile, `/healthz`, CI ← *done*
 2. **Catalog** — products and variants, seed command, admin CRUD ← *done*
-3. **Admin auth** — signed session cookie, `RequireAdmin`, `cmd/hashpw` ← *done*
+3. **Admin auth** — `RequireAdmin`, `cmd/hashpw`; the signed cookie it started with was replaced in 11.6 ← *done*
 4. **Storefront reads** — `/products` pages and fragments, vendored htmx, CORS ← *done*
 5. **Cart** — cookie-keyed server-side cart, add/update/remove ← *done*
 6. **Checkout + PayFast** — orders, signature, ITN validation ← *done*
@@ -1584,6 +1609,10 @@ unchanged when a migration needs to be inspected or applied by hand.
 9. **Hardening** — rate limits, argon2id, CSP review, oversell flagging, cart cleanup ← *done*
 10. **Categories** — schema reset, `categories` + join table, `kind` retired, CRUD ← *done*
 11. **Search and filtering** — full-text plus trigram, category filters, pagination, images ← *done*
+11.5. **Administrator accounts** — `admin_users`, roles, the last-owner guards ← *done*
+11.6. **Sessions and setup** — `admin_sessions`, the `/admin/setup` claim, no credential in the environment ← *done*
+11.7. **Authorization** — a permission named on every route registration, `must_change_password`
+11.8. **Account management** — `/admin/users`, own-password change
 12. Publish
 
 ## Licence

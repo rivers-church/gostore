@@ -24,6 +24,7 @@ import (
 	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
 	"github.com/17xande-dev/gostore/internal/payment"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // testEmail and testPassword are the owner account every test in this package
@@ -74,6 +75,10 @@ type shop struct {
 	// purchased file went into the public bucket.
 	files  *blob.FakeDownloads
 	grants *downloads.Store
+
+	// pool is the database behind all of the above, for the tests that need to
+	// take it away — an outage is a response an admin page has to get right.
+	pool *pgxpool.Pool
 
 	// users is the administrator accounts. Tests reach for it to create a second
 	// administrator, to revoke a session, or to assert on what a handler did to an
@@ -179,7 +184,8 @@ func newUnclaimedStore(t *testing.T, edit ...func(*config.Config)) *shop {
 	t.Cleanup(srv.Close)
 	return &shop{
 		srv: srv, catalog: store, orders: orderStore, gateway: gateway,
-		mail: mail, images: images, files: files, grants: grants, users: users,
+		mail: mail, images: images, files: files, grants: grants,
+		users: users, pool: pool,
 	}
 }
 

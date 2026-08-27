@@ -120,9 +120,9 @@ check-config:
 	@$(DEV_ENV) go run . -check-config
 
 ## hashpw: read a password from the terminal and print an argon2id hash
-# A lockout-recovery path, not part of setup: administrators are created in
-# /admin/users and the first one is claimed at /admin/setup. See cmd/hashpw for
-# the UPDATE this hash goes into, and the DELETE that must go with it.
+# A lockout-recovery path, not part of setup: the first administrator is claimed at
+# /admin/setup. See cmd/hashpw for the UPDATE this hash goes into, and the DELETE
+# that must go with it.
 #
 # The password is never echoed and never becomes a command-line argument, so it
 # stays out of shell history and out of `ps`.

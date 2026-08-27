@@ -237,8 +237,32 @@ func ensureSetupToken(ctx context.Context, users *auth.Store, supplied string, l
 		return err
 	}
 	if !stored {
-		// A token is already there, unclaimed, and only its hash is — so this one
-		// cannot be reported and the earlier one cannot be recovered.
+		// A token is already there and unclaimed. admin_setup holds a single row,
+		// so this one was not stored and the one that was cannot be changed by a
+		// restart — which is deliberate: a browser may be sitting on a
+		// half-finished setup page holding it.
+		//
+		// Which of the two situations this is matters to the operator, so ask
+		// rather than guess. A supplied token that does not match is the trap: it
+		// looks configured, it is in the environment, and /admin/setup will refuse
+		// it with nothing anywhere to say why.
+		if supplied != "" {
+			matches, err := users.CheckSetupToken(ctx, supplied)
+			if err != nil {
+				return err
+			}
+			if !matches {
+				log.Warn("SETUP_TOKEN does not match the setup token already issued, and is being ignored",
+					"visit", "/admin/setup",
+					"note", "the issued token is stored only as a hash and cannot be recovered or replaced; "+
+						"claim the store with the token from an earlier log line, or "+
+						"DELETE FROM admin_setup to have SETUP_TOKEN take effect on the next start")
+				return nil
+			}
+			log.Info("no administrator exists; SETUP_TOKEN will claim the first account",
+				"visit", "/admin/setup")
+			return nil
+		}
 		log.Warn("no administrator exists and a setup token has already been issued",
 			"visit", "/admin/setup",
 			"note", "the token was printed when it was issued; look further back in this log, "+
