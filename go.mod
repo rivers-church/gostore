@@ -14,7 +14,7 @@ require (
 require github.com/wneessen/go-mail v0.8.1 // indirect
 
 require (
-	github.com/17xande-dev/mailer v0.0.0
+	github.com/17xande-dev/mailer v0.1.0
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -41,5 +41,3 @@ require (
 	golang.org/x/text v0.40.0 // indirect
 	gopkg.in/ini.v1 v1.67.2 // indirect
 )
-
-replace github.com/17xande-dev/mailer => ../mailer
