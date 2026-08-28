@@ -92,6 +92,7 @@ list with defaults.
 | `SMTP_PORT` | no | `587` | `465` with `SMTP_TLS=tls`, `1025` for mailpit |
 | `SMTP_TLS` | no | `starttls` | `starttls`, `tls` (implicit) or `none` (development only) |
 | `SMTP_USERNAME` / `SMTP_PASSWORD` | no | — | Omit both for a relay that authenticates by address |
+| `SMTP_OAUTH_TENANT_ID` / `SMTP_OAUTH_CLIENT_ID` / `SMTP_OAUTH_CLIENT_SECRET` | no⁵ | — | Authenticate with XOAUTH2 instead of a password. See [Microsoft Exchange Online](#microsoft-exchange-online) |
 | `EMAIL_REPLY_TO` | no | — | When replies should not go to `EMAIL_FROM` |
 | `ORDER_NOTIFY_EMAIL` | no | — | Sends a copy of each paid order to whoever packs it |
 | `IMAGE_DIR` | **yes**³ | — | Store images in this directory, served by this server |
@@ -137,6 +138,13 @@ the admin says so. Two overlaps refuse to boot, and both would otherwise publish
 somebody paid for: a `DOWNLOAD_DIR` that is, contains, or sits inside `IMAGE_DIR` — which is
 served publicly at `/images/` — and a `DOWNLOAD_BUCKET` equal to `BLOB_BUCKET`, which is
 anonymously readable.
+
+⁵ **All three or none.** A half-configured app registration refuses to boot, because the
+alternative is a store that starts, takes an order, and only then finds it cannot
+authenticate — with the buyer's download link in the message it failed to send. Setting them
+alongside `SMTP_PASSWORD` also refuses: which one authenticates would be a guess, and the
+loser would sit in the environment looking live. `SMTP_USERNAME` becomes required, because
+XOAUTH2 authenticates as a named mailbox.
 
 ## Admin
 
@@ -1123,8 +1131,43 @@ order say different things, and one of them failing should not suppress the othe
 section used to say. The old reasoning — the shop's job is to take an order and record it,
 which does not depend on a mail server — held while every product was a parcel. It stopped
 holding when a product could be a download: that link is emailed and nowhere else, because
-only its hash is stored. `email.Discard` still exists for tests and for an adopter assembling
+only its hash is stored. `mailer.Discard` still exists for tests and for an adopter assembling
 their own `main`, but the shipped binary no longer reaches it.
+
+Sending itself lives in [`github.com/17xande-dev/mailer`](https://github.com/17xande-dev/mailer),
+which is shared with another application rather than kept here.
+
+### Microsoft Exchange Online
+
+Basic Auth for SMTP client submission is going away, so an Exchange mailbox is reached with
+**XOAUTH2**: the password becomes an OAuth2 access token, fetched per send and cached until
+shortly before it expires.
+
+```bash
+SMTP_HOST=smtp.office365.com
+SMTP_PORT=587
+SMTP_TLS=starttls
+SMTP_USERNAME=orders@example.com   # the mailbox; XOAUTH2 authenticates as a named one
+EMAIL_FROM=orders@example.com
+SMTP_OAUTH_TENANT_ID=...
+SMTP_OAUTH_CLIENT_ID=...
+SMTP_OAUTH_CLIENT_SECRET=...
+# and no SMTP_PASSWORD — setting both refuses to boot
+```
+
+**The tenant-side setup is the part that bites**, and none of it is visible from here: a
+tenant that has not been set up hands out a token perfectly happily and the mail server then
+refuses it. You need an Entra ID app registration with the **`SMTP.SendAsApp`** application
+permission (Office 365 Exchange Online) and admin consent, a service principal for it
+registered in Exchange Online, **Send As** on the mailbox, and **SMTP AUTH enabled for that
+mailbox** — it is disabled tenant-wide by default. Check each against current Microsoft
+documentation; these requirements move.
+
+Worth weighing before choosing this at all: Exchange Online is a mailbox service rather than
+a transactional relay, and it throttles accordingly. A dropped confirmation costs a buyer
+their download link, since it exists nowhere else. A dedicated transactional provider over
+ordinary SMTP is the lower-risk option for a storefront, and needs none of the above — just
+`SMTP_USERNAME` and `SMTP_PASSWORD`.
 
 ### Email templates
 
@@ -1429,7 +1472,7 @@ question is the depth of the problem, not the size of the dependency.
 | [`justinas/nosurf`](https://github.com/justinas/nosurf) | CSRF tokens and origin checks |
 | [`golang.org/x/crypto`](https://pkg.go.dev/golang.org/x/crypto) | `argon2` for admin password hashing, `bcrypt` to keep older hashes verifying |
 | [`golang.org/x/time`](https://pkg.go.dev/golang.org/x/time/rate) | The token bucket behind the rate limits |
-| [`wneessen/go-mail`](https://github.com/wneessen/go-mail) | Sending email: MIME, RFC 2047 subjects, quoted-printable, STARTTLS and implicit TLS |
+| [`17xande-dev/mailer`](https://github.com/17xande-dev/mailer) | Sending email, behind one `Sender` interface — the SMTP transport, the XOAUTH2 token dance for Exchange, and the fake the handler tests inject. Shared with another application, which is why it is a module rather than an `internal/` package. It pulls in [`wneessen/go-mail`](https://github.com/wneessen/go-mail) for MIME, RFC 2047 subjects, quoted-printable, STARTTLS and implicit TLS |
 | [`minio/minio-go/v7`](https://github.com/minio/minio-go) | Object storage over the S3 API — R2, GCS interop, MinIO |
 
 Everything else is stdlib so far, by decision rather than by rule. Notably **not** taken:

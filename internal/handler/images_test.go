@@ -16,9 +16,9 @@ import (
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/dbtest"
 	"github.com/17xande-dev/gostore/internal/downloads"
-	"github.com/17xande-dev/gostore/internal/email"
 	"github.com/17xande-dev/gostore/internal/orders"
 	"github.com/17xande-dev/gostore/internal/payment"
+	"github.com/17xande-dev/mailer"
 )
 
 // diskShop is a store whose images are files this server serves — the IMAGE_DIR
@@ -45,7 +45,7 @@ func diskShop(t *testing.T) (*httptest.Server, *blob.Disk, string) {
 		Config: cfg, Log: slog.New(slog.DiscardHandler), Tmpl: tmpl,
 		Catalog: cat, Carts: cart.NewStore(pool), Orders: orders.NewStore(pool),
 		Grants:  downloads.NewStore(pool, cat),
-		Gateway: payment.NewFake(), Mail: email.NewFake(), Images: storage,
+		Gateway: payment.NewFake(), Mail: mailer.NewFake(), Images: storage,
 		Files: blob.NewFakeDownloads(), Users: auth.NewStore(pool),
 	})
 

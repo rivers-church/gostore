@@ -21,10 +21,10 @@ import (
 	"github.com/17xande-dev/gostore/internal/config"
 	"github.com/17xande-dev/gostore/internal/dbtest"
 	"github.com/17xande-dev/gostore/internal/downloads"
-	"github.com/17xande-dev/gostore/internal/email"
 	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
 	"github.com/17xande-dev/gostore/internal/payment"
+	"github.com/17xande-dev/mailer"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -69,7 +69,7 @@ type shop struct {
 	catalog *catalog.Store
 	orders  *orders.Store
 	gateway *payment.Fake
-	mail    *email.Fake
+	mail    *mailer.Fake
 	images  *blob.Fake
 	// files is the private download store. Separate from images on purpose, as in
 	// production: a test that used one for both would not notice the day a
@@ -148,7 +148,7 @@ func newUnclaimedStore(t *testing.T, edit ...func(*config.Config)) *shop {
 	log := slog.New(slog.DiscardHandler)
 	users := auth.NewStore(pool)
 	gateway := payment.NewFake()
-	mail := email.NewFake()
+	mail := mailer.NewFake()
 	files := blob.NewFakeDownloads()
 	grants := downloads.NewStore(pool, store)
 	h := New(Deps{

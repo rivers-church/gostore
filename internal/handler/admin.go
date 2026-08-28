@@ -15,11 +15,11 @@ import (
 	"github.com/17xande-dev/gostore/internal/catalog"
 	"github.com/17xande-dev/gostore/internal/config"
 	"github.com/17xande-dev/gostore/internal/downloads"
-	"github.com/17xande-dev/gostore/internal/email"
 	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
 	"github.com/17xande-dev/gostore/internal/payment"
 	"github.com/17xande-dev/gostore/internal/validate"
+	"github.com/17xande-dev/mailer"
 	"github.com/justinas/nosurf"
 )
 
@@ -34,7 +34,7 @@ type Handler struct {
 	orders  *orders.Store
 	grants  *downloads.Store
 	gateway payment.Gateway
-	mail    email.Sender
+	mail    mailer.Sender
 	// blob is the PUBLIC image store and files is the PRIVATE download store.
 	// They are never interchangeable: putting a purchased file through blob would
 	// publish it, and it is worth the two fields being named differently enough
@@ -111,7 +111,7 @@ type Deps struct {
 	Orders  *orders.Store
 	Grants  *downloads.Store
 	Gateway payment.Gateway
-	Mail    email.Sender
+	Mail    mailer.Sender
 	Images  blob.Storage
 	Files   blob.Downloads
 	Users   *auth.Store

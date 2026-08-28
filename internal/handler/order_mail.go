@@ -3,8 +3,8 @@ package handler
 import (
 	"context"
 
-	"github.com/17xande-dev/gostore/internal/email"
 	"github.com/17xande-dev/gostore/internal/orders"
+	"github.com/17xande-dev/mailer"
 )
 
 // Mail for a paid order, and the one invariant that governs all of it: **the order
@@ -125,8 +125,8 @@ func (h *Handler) sendConfirmation(ctx context.Context, data orderMailData) erro
 	if err != nil {
 		return err
 	}
-	return h.mail.Send(ctx, email.Message{
-		To:      data.Order.Customer.Email,
+	return h.mail.Send(ctx, mailer.Message{
+		To:      []string{data.Order.Customer.Email},
 		Subject: data.StoreName + " order " + data.Order.Reference() + " — payment received",
 		Text:    text,
 		HTML:    html,
@@ -145,8 +145,8 @@ func (h *Handler) sendOwnerNotification(ctx context.Context, data orderMailData)
 		// acting on before the parcel is packed.
 		subject = "OVERSOLD: " + subject
 	}
-	return h.mail.Send(ctx, email.Message{
-		To:      h.cfg.OrderNotifyEmail,
+	return h.mail.Send(ctx, mailer.Message{
+		To:      []string{h.cfg.OrderNotifyEmail},
 		Subject: subject,
 		Text:    text,
 	})

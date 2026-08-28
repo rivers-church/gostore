@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/17xande-dev/gostore/internal/blob"
-	"github.com/17xande-dev/gostore/internal/email"
+	"github.com/17xande-dev/mailer"
 )
 
 // Config is the fully resolved configuration for one server process.
@@ -72,10 +72,8 @@ type Config struct {
 	// would be chosen.
 	PayFast PayFast
 
-	// SMTP is how transactional mail leaves. It is optional: a store with no mail
-	// server still takes orders correctly, and refusing to boot over it would
-	// trade a working shop for a missing receipt. An unconfigured deployment logs
-	// loudly at startup and again for every message it drops.
+	// SMTP is how transactional mail leaves. It is required — see the refusal in
+	// Load, and the reason recorded there.
 	SMTP SMTP
 
 	// OrderNotifyEmail is where a copy of each paid order goes — whoever packs the
@@ -354,6 +352,24 @@ type SMTP struct {
 	// TLS is "starttls" (the default, correct for port 587), "tls" (implicit, for
 	// 465) or "none" (development only).
 	TLS string
+
+	// OAuth, when configured, replaces Password with an XOAUTH2 access token
+	// fetched per send. It is how a Microsoft Exchange Online mailbox is reached
+	// now that Basic Auth for SMTP client submission is going away.
+	OAuth SMTPOAuth
+}
+
+// SMTPOAuth is an Entra ID app registration, used to obtain an access token for
+// XOAUTH2. All three parts are needed or none of them are.
+type SMTPOAuth struct {
+	TenantID     string
+	ClientID     string
+	ClientSecret string
+}
+
+// Configured reports whether a token can be obtained.
+func (o SMTPOAuth) Configured() bool {
+	return o.TenantID != "" && o.ClientID != "" && o.ClientSecret != ""
 }
 
 // Configured reports whether mail can actually be sent. Both a host and a From
@@ -418,6 +434,11 @@ func Load() (Config, error) {
 			From:     strings.TrimSpace(os.Getenv("EMAIL_FROM")),
 			ReplyTo:  strings.TrimSpace(os.Getenv("EMAIL_REPLY_TO")),
 			TLS:      env("SMTP_TLS", "starttls"),
+			OAuth: SMTPOAuth{
+				TenantID:     strings.TrimSpace(os.Getenv("SMTP_OAUTH_TENANT_ID")),
+				ClientID:     strings.TrimSpace(os.Getenv("SMTP_OAUTH_CLIENT_ID")),
+				ClientSecret: os.Getenv("SMTP_OAUTH_CLIENT_SECRET"),
+			},
 		},
 		PayFast: PayFast{
 			MerchantID:  os.Getenv("PAYFAST_MERCHANT_ID"),
@@ -576,7 +597,7 @@ func Load() (Config, error) {
 		}
 		c.SMTP.Port = n
 	}
-	if _, err := email.ParseTLSPolicy(c.SMTP.TLS); err != nil {
+	if _, err := mailer.ParseTLSPolicy(c.SMTP.TLS); err != nil {
 		return Config{}, fmt.Errorf("config: SMTP_TLS: %w", err)
 	}
 	if (c.SMTP.Host == "") != (c.SMTP.From == "") {
@@ -604,6 +625,33 @@ func Load() (Config, error) {
 	if c.OrderNotifyEmail != "" && !c.SMTP.Configured() {
 		return Config{}, fmt.Errorf(
 			"config: ORDER_NOTIFY_EMAIL is set but SMTP is not, so the notification could never be sent")
+	}
+
+	// XOAUTH2 is all or nothing. A half-configured app registration would boot,
+	// then fail to authenticate against Exchange on the first paid order — which
+	// is the worst possible moment to discover a missing environment variable.
+	oauth := c.SMTP.OAuth
+	if !oauth.Configured() && (oauth.TenantID != "" || oauth.ClientID != "" || oauth.ClientSecret != "") {
+		return Config{}, fmt.Errorf(
+			"config: SMTP_OAUTH_TENANT_ID, SMTP_OAUTH_CLIENT_ID and SMTP_OAUTH_CLIENT_SECRET " +
+				"must be set together")
+	}
+	if oauth.Configured() {
+		// XOAUTH2 authenticates as a named mailbox, so the username is not
+		// optional the way it is for a relay that authenticates by address.
+		if c.SMTP.Username == "" {
+			return Config{}, fmt.Errorf(
+				"config: SMTP_USERNAME is required with SMTP OAuth — XOAUTH2 authenticates " +
+					"as a named mailbox")
+		}
+		// Refused rather than resolved by precedence. Both being set means
+		// somebody has a belief about which one is in use, and a silent winner
+		// would leave a stale secret sitting in the environment looking live.
+		if c.SMTP.Password != "" {
+			return Config{}, fmt.Errorf(
+				"config: SMTP_PASSWORD and SMTP OAuth are both set, so which one authenticates " +
+					"would be a guess; unset SMTP_PASSWORD")
+		}
 	}
 
 	// One image backend at most. Both configured would leave which one wins to be

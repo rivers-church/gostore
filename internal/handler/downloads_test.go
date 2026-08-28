@@ -9,6 +9,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -538,7 +539,7 @@ func TestDownloads_EmailCarriesTheLinkAndTheOwnerCopyDoesNot(t *testing.T) {
 	t.Fatal("the customer's email does not carry the download link")
 found:
 	for _, m := range d.mail.Sent() {
-		if m.To != "jane@example.com" && strings.Contains(m.Text, token) {
+		if !slices.Contains(m.To, "jane@example.com") && strings.Contains(m.Text, token) {
 			t.Errorf("a download token reached %s", m.To)
 		}
 	}

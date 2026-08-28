@@ -7,12 +7,14 @@ require (
 	github.com/justinas/nosurf v1.2.0
 	github.com/minio/minio-go/v7 v7.2.1
 	github.com/pressly/goose/v3 v3.27.3
-	github.com/wneessen/go-mail v0.8.1
 	golang.org/x/crypto v0.54.0
 	golang.org/x/time v0.15.0
 )
 
+require github.com/wneessen/go-mail v0.8.1 // indirect
+
 require (
+	github.com/17xande-dev/mailer v0.0.0
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -39,3 +41,5 @@ require (
 	golang.org/x/text v0.40.0 // indirect
 	gopkg.in/ini.v1 v1.67.2 // indirect
 )
+
+replace github.com/17xande-dev/mailer => ../mailer

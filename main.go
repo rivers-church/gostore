@@ -22,12 +22,13 @@ import (
 	"github.com/17xande-dev/gostore/internal/config"
 	"github.com/17xande-dev/gostore/internal/db"
 	"github.com/17xande-dev/gostore/internal/downloads"
-	"github.com/17xande-dev/gostore/internal/email"
 	"github.com/17xande-dev/gostore/internal/handler"
 	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
 	"github.com/17xande-dev/gostore/internal/payment"
 	"github.com/17xande-dev/gostore/internal/payment/payfast"
+	"github.com/17xande-dev/mailer"
+	"github.com/17xande-dev/mailer/msauth"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -341,42 +342,61 @@ func newGateway(cfg config.Config, log *slog.Logger) (payment.Gateway, error) {
 // nowhere else, because only its hash is stored. An unconfigured relay there does
 // not drop a receipt, it takes money for something the buyer can never reach.
 // config.Load is where the refusal happens.
-func newMailer(cfg config.Config, log *slog.Logger) (email.Sender, error) {
+func newMailer(cfg config.Config, log *slog.Logger) (mailer.Sender, error) {
 	// config.Load refuses to boot without SMTP, so this is unreachable through
 	// main. It is kept as an error rather than deleted because newMailer is the
 	// only thing standing between an unconfigured relay and a silently dropped
 	// receipt, and a second reader of this function should not have to go and
 	// check that somebody else already refused.
 	//
-	// email.Discard still exists for tests and for an adopter assembling their own
+	// mailer.Discard still exists for tests and for an adopter assembling their own
 	// main with different rules. It is no longer reachable from this one.
 	if !cfg.SMTP.Configured() {
 		return nil, fmt.Errorf("config: SMTP_HOST and EMAIL_FROM are required")
 	}
 
-	policy, err := email.ParseTLSPolicy(cfg.SMTP.TLS)
+	policy, err := mailer.ParseTLSPolicy(cfg.SMTP.TLS)
 	if err != nil {
 		return nil, err
 	}
-	if policy == email.TLSNone {
+	if policy == mailer.TLSNone {
 		log.Warn("SMTP TLS is disabled: credentials and order details go over the network in the clear",
 			"host", cfg.SMTP.Host)
 	}
 
-	sender, err := email.NewSMTPSender(email.SMTPConfig{
-		Host:     cfg.SMTP.Host,
-		Port:     cfg.SMTP.Port,
-		Username: cfg.SMTP.Username,
-		Password: cfg.SMTP.Password,
-		From:     cfg.SMTP.From,
-		ReplyTo:  cfg.SMTP.ReplyTo,
-		TLS:      policy,
+	// XOAUTH2 when an app registration is configured, which is how an Exchange
+	// Online mailbox is reached; a password otherwise. The token source is built
+	// here rather than dialled: a slow or unreachable identity provider at boot
+	// is not a reason to refuse to start a shop, for the same reason the relay
+	// itself is not.
+	var tokens mailer.TokenSource
+	auth := "password"
+	if cfg.SMTP.OAuth.Configured() {
+		tokens, err = msauth.New(
+			cfg.SMTP.OAuth.TenantID, cfg.SMTP.OAuth.ClientID, cfg.SMTP.OAuth.ClientSecret)
+		if err != nil {
+			return nil, err
+		}
+		auth = "xoauth2"
+	} else if cfg.SMTP.Username == "" {
+		auth = "none"
+	}
+
+	sender, err := mailer.NewSMTPSender(mailer.SMTPConfig{
+		Host:        cfg.SMTP.Host,
+		Port:        cfg.SMTP.Port,
+		Username:    cfg.SMTP.Username,
+		Password:    cfg.SMTP.Password,
+		TokenSource: tokens,
+		From:        cfg.SMTP.From,
+		ReplyTo:     cfg.SMTP.ReplyTo,
+		TLS:         policy,
 	})
 	if err != nil {
 		return nil, err
 	}
 	log.Info("email configured", "host", cfg.SMTP.Host, "port", cfg.SMTP.Port,
-		"from", cfg.SMTP.From, "tls", policy, "notify", cfg.OrderNotifyEmail)
+		"from", cfg.SMTP.From, "tls", policy, "auth", auth, "notify", cfg.OrderNotifyEmail)
 	return sender, nil
 }
 

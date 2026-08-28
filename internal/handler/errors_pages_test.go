@@ -15,10 +15,10 @@ import (
 	"github.com/17xande-dev/gostore/internal/config"
 	"github.com/17xande-dev/gostore/internal/dbtest"
 	"github.com/17xande-dev/gostore/internal/downloads"
-	"github.com/17xande-dev/gostore/internal/email"
 	"github.com/17xande-dev/gostore/internal/middleware"
 	"github.com/17xande-dev/gostore/internal/orders"
 	"github.com/17xande-dev/gostore/internal/payment"
+	"github.com/17xande-dev/mailer"
 )
 
 // The invariant these tests defend: an error response either fills the target it
@@ -299,7 +299,7 @@ func brokenStorefront(t *testing.T, cfg config.Config) *httptest.Server {
 		Config: cfg, Log: slog.New(slog.DiscardHandler), Tmpl: tmpl,
 		Catalog: store, Carts: cart.NewStore(pool), Orders: orders.NewStore(pool),
 		Grants:  downloads.NewStore(pool, store),
-		Gateway: gateway, Mail: email.NewFake(), Images: images,
+		Gateway: gateway, Mail: mailer.NewFake(), Images: images,
 		Files: blob.NewFakeDownloads(), Users: auth.NewStore(pool),
 	})
 

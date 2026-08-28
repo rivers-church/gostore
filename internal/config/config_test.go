@@ -695,3 +695,97 @@ func TestBytesEnv(t *testing.T) {
 		}
 	}
 }
+
+// setOAuth configures a complete app registration, so each case below can break
+// exactly one part of it.
+func setOAuth(t *testing.T) {
+	t.Helper()
+	t.Setenv("SMTP_USERNAME", "orders@example.com")
+	t.Setenv("SMTP_OAUTH_TENANT_ID", "tenant-id")
+	t.Setenv("SMTP_OAUTH_CLIENT_ID", "client-id")
+	t.Setenv("SMTP_OAUTH_CLIENT_SECRET", "client-secret")
+}
+
+func TestLoad_SMTPOAuth(t *testing.T) {
+	setRequired(t)
+	setOAuth(t)
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !c.SMTP.OAuth.Configured() {
+		t.Fatalf("OAuth = %+v, want it configured", c.SMTP.OAuth)
+	}
+	if c.SMTP.OAuth.TenantID != "tenant-id" || c.SMTP.OAuth.ClientID != "client-id" ||
+		c.SMTP.OAuth.ClientSecret != "client-secret" {
+		t.Errorf("OAuth = %+v, want the configured registration", c.SMTP.OAuth)
+	}
+
+	// Absent entirely is the ordinary case, not an error: a relay reached with a
+	// password, or none at all, is still supported.
+	t.Setenv("SMTP_OAUTH_TENANT_ID", "")
+	t.Setenv("SMTP_OAUTH_CLIENT_ID", "")
+	t.Setenv("SMTP_OAUTH_CLIENT_SECRET", "")
+	c, err = Load()
+	if err != nil {
+		t.Fatalf("Load with no OAuth: %v", err)
+	}
+	if c.SMTP.OAuth.Configured() {
+		t.Error("an empty environment produced a configured registration")
+	}
+}
+
+// A half-configured registration is a boot failure. The alternative is a store
+// that starts, takes an order, and only then discovers it cannot authenticate —
+// with the buyer's download link in the message it failed to send.
+func TestLoad_SMTPOAuthMustBeComplete(t *testing.T) {
+	for _, missing := range []string{
+		"SMTP_OAUTH_TENANT_ID", "SMTP_OAUTH_CLIENT_ID", "SMTP_OAUTH_CLIENT_SECRET",
+	} {
+		t.Run(missing, func(t *testing.T) {
+			setRequired(t)
+			setOAuth(t)
+			t.Setenv(missing, "")
+
+			_, err := Load()
+			if err == nil {
+				t.Fatalf("a registration missing %s was accepted", missing)
+			}
+			if !strings.Contains(err.Error(), "must be set together") {
+				t.Errorf("error = %v, want it to say the three go together", err)
+			}
+		})
+	}
+}
+
+func TestLoad_SMTPOAuthNeedsAUsername(t *testing.T) {
+	setRequired(t)
+	setOAuth(t)
+	t.Setenv("SMTP_USERNAME", "")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("OAuth with no username was accepted")
+	}
+	if !strings.Contains(err.Error(), "SMTP_USERNAME") {
+		t.Errorf("error = %v, want it to name SMTP_USERNAME", err)
+	}
+}
+
+// Refused rather than resolved by precedence: both being set means somebody has
+// a belief about which one is in use, and a silent winner would leave a stale
+// secret in the environment looking live.
+func TestLoad_SMTPOAuthAndPasswordConflict(t *testing.T) {
+	setRequired(t)
+	setOAuth(t)
+	t.Setenv("SMTP_PASSWORD", "hunter2")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("a password and an app registration were both accepted")
+	}
+	if !strings.Contains(err.Error(), "SMTP_PASSWORD") {
+		t.Errorf("error = %v, want it to name SMTP_PASSWORD", err)
+	}
+}
