@@ -72,9 +72,15 @@ type Config struct {
 	// would be chosen.
 	PayFast PayFast
 
-	// SMTP is how transactional mail leaves. It is required — see the refusal in
-	// Load, and the reason recorded there.
+	// SMTP is how transactional mail leaves. It is required, unless Graph is
+	// configured instead — see the refusal in Load, and the reason recorded
+	// there.
 	SMTP SMTP
+
+	// Graph, when configured, sends mail through the Microsoft Graph API
+	// instead of SMTP. It takes precedence over SMTP when both are set — see
+	// newMailer in main.go.
+	Graph Graph
 
 	// OrderNotifyEmail is where a copy of each paid order goes — whoever packs the
 	// parcel. Empty means the customer's confirmation is the only mail sent, and
@@ -377,6 +383,27 @@ func (o SMTPOAuth) Configured() bool {
 // half-configured is the case worth catching at startup.
 func (s SMTP) Configured() bool { return s.Host != "" && s.From != "" }
 
+// Graph is an Entra ID app registration used to send mail through the
+// Microsoft Graph API instead of SMTP. It is a separate path from SMTP.OAuth:
+// the two need different app permissions (Mail.Send versus SMTP.SendAsApp) and
+// different token audiences, and are not interchangeable.
+type Graph struct {
+	TenantID     string
+	ClientID     string
+	ClientSecret string
+	// From is the mailbox to send as. Kept separate from SMTP.From rather than
+	// shared, since a deployment choosing Graph has no reason to have set SMTP
+	// up at all.
+	From string
+}
+
+// Configured reports whether Graph can actually be used. All four are needed:
+// three for the token and From for the mailbox, and half-configured is the case
+// worth catching at startup rather than at the first order.
+func (g Graph) Configured() bool {
+	return g.TenantID != "" && g.ClientID != "" && g.ClientSecret != "" && g.From != ""
+}
+
 // AllowsEmbedding reports whether any origin may fetch the catalog fragments.
 func (c Config) AllowsEmbedding() bool { return len(c.EmbedOrigins) > 0 }
 
@@ -439,6 +466,12 @@ func Load() (Config, error) {
 				ClientID:     strings.TrimSpace(os.Getenv("SMTP_OAUTH_CLIENT_ID")),
 				ClientSecret: os.Getenv("SMTP_OAUTH_CLIENT_SECRET"),
 			},
+		},
+		Graph: Graph{
+			TenantID:     strings.TrimSpace(os.Getenv("GRAPH_TENANT_ID")),
+			ClientID:     strings.TrimSpace(os.Getenv("GRAPH_CLIENT_ID")),
+			ClientSecret: os.Getenv("GRAPH_CLIENT_SECRET"),
+			From:         strings.TrimSpace(os.Getenv("EMAIL_FROM")),
 		},
 		PayFast: PayFast{
 			MerchantID:  os.Getenv("PAYFAST_MERCHANT_ID"),
@@ -600,11 +633,26 @@ func Load() (Config, error) {
 	if _, err := mailer.ParseTLSPolicy(c.SMTP.TLS); err != nil {
 		return Config{}, fmt.Errorf("config: SMTP_TLS: %w", err)
 	}
-	if (c.SMTP.Host == "") != (c.SMTP.From == "") {
+	// From set without Host is not an error on its own: it is what a Graph-only
+	// deployment looks like, since EMAIL_FROM serves both transports. Host
+	// without From is still a mistake — a relay with no sender is not a working
+	// configuration.
+	if c.SMTP.Host != "" && c.SMTP.From == "" {
 		return Config{}, fmt.Errorf(
-			"config: SMTP_HOST and EMAIL_FROM must be set together; got host %q and from %q",
-			c.SMTP.Host, c.SMTP.From)
+			"config: EMAIL_FROM is required when SMTP_HOST is set")
 	}
+	// Graph is all or nothing, for the same reason XOAUTH2 is below: a
+	// half-configured app registration would boot, then fail to send on the
+	// first paid order. Checked before the general mail requirement below, so a
+	// deployment that got partway through setting Graph up gets the specific
+	// error rather than the generic "nothing is configured" one.
+	graph := c.Graph
+	if !graph.Configured() && (graph.TenantID != "" || graph.ClientID != "" || graph.ClientSecret != "") {
+		return Config{}, fmt.Errorf(
+			"config: GRAPH_TENANT_ID, GRAPH_CLIENT_ID, GRAPH_CLIENT_SECRET and EMAIL_FROM " +
+				"must all be set to send through Graph")
+	}
+
 	// Mail is REQUIRED, and this reverses an earlier decision that it was optional.
 	// The reason it changed is a fact that did not exist when it was made: a digital
 	// download reaches its buyer as a link in the confirmation email, and only the
@@ -616,15 +664,17 @@ func Load() (Config, error) {
 	// does not depend on a mail server" — was right about a shop selling parcels
 	// and is wrong about one that can sell downloads. Since any deployment *might*
 	// sell one, the requirement is unconditional rather than tied to whether a
-	// digital product happens to exist today.
-	if !c.SMTP.Configured() {
+	// digital product happens to exist today. Graph satisfies it just as SMTP does.
+	if !c.SMTP.Configured() && !c.Graph.Configured() {
 		return Config{}, fmt.Errorf(
-			"config: SMTP_HOST and EMAIL_FROM are required — a store must be able to send " +
-				"a receipt, and a digital download's link exists nowhere else")
+			"config: SMTP_HOST and EMAIL_FROM (or GRAPH_TENANT_ID, GRAPH_CLIENT_ID, " +
+				"GRAPH_CLIENT_SECRET and EMAIL_FROM) are required — a store must be able " +
+				"to send a receipt, and a digital download's link exists nowhere else")
 	}
-	if c.OrderNotifyEmail != "" && !c.SMTP.Configured() {
+	if c.OrderNotifyEmail != "" && !c.SMTP.Configured() && !c.Graph.Configured() {
 		return Config{}, fmt.Errorf(
-			"config: ORDER_NOTIFY_EMAIL is set but SMTP is not, so the notification could never be sent")
+			"config: ORDER_NOTIFY_EMAIL is set but no mail transport is configured, " +
+				"so the notification could never be sent")
 	}
 
 	// XOAUTH2 is all or nothing. A half-configured app registration would boot,

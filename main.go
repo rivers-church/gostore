@@ -343,16 +343,38 @@ func newGateway(cfg config.Config, log *slog.Logger) (payment.Gateway, error) {
 // not drop a receipt, it takes money for something the buyer can never reach.
 // config.Load is where the refusal happens.
 func newMailer(cfg config.Config, log *slog.Logger) (mailer.Sender, error) {
-	// config.Load refuses to boot without SMTP, so this is unreachable through
-	// main. It is kept as an error rather than deleted because newMailer is the
-	// only thing standing between an unconfigured relay and a silently dropped
-	// receipt, and a second reader of this function should not have to go and
-	// check that somebody else already refused.
+	// config.Load refuses to boot without SMTP or Graph, so this is unreachable
+	// through main. It is kept as an error rather than deleted because newMailer
+	// is the only thing standing between an unconfigured relay and a silently
+	// dropped receipt, and a second reader of this function should not have to
+	// go and check that somebody else already refused.
 	//
 	// mailer.Discard still exists for tests and for an adopter assembling their own
 	// main with different rules. It is no longer reachable from this one.
-	if !cfg.SMTP.Configured() {
-		return nil, fmt.Errorf("config: SMTP_HOST and EMAIL_FROM are required")
+	if !cfg.SMTP.Configured() && !cfg.Graph.Configured() {
+		return nil, fmt.Errorf("config: SMTP_HOST and EMAIL_FROM, or Graph, are required")
+	}
+
+	// Graph wins when configured. The two are not layered — a deployment picks
+	// one app registration and one permission grant, not both — so there is no
+	// reason to build an SMTP sender at all once Graph is in play.
+	if cfg.Graph.Configured() {
+		tokens, err := msauth.New(cfg.Graph.TenantID, cfg.Graph.ClientID, cfg.Graph.ClientSecret,
+			msauth.WithScope(msauth.ScopeGraph))
+		if err != nil {
+			return nil, err
+		}
+		sender, err := mailer.NewGraphSender(mailer.GraphConfig{
+			TokenSource: tokens,
+			From:        cfg.Graph.From,
+			ReplyTo:     cfg.SMTP.ReplyTo,
+		})
+		if err != nil {
+			return nil, err
+		}
+		log.Info("email configured", "transport", "graph", "from", cfg.Graph.From,
+			"notify", cfg.OrderNotifyEmail)
+		return sender, nil
 	}
 
 	policy, err := mailer.ParseTLSPolicy(cfg.SMTP.TLS)
@@ -395,7 +417,7 @@ func newMailer(cfg config.Config, log *slog.Logger) (mailer.Sender, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.Info("email configured", "host", cfg.SMTP.Host, "port", cfg.SMTP.Port,
+	log.Info("email configured", "transport", "smtp", "host", cfg.SMTP.Host, "port", cfg.SMTP.Port,
 		"from", cfg.SMTP.From, "tls", policy, "auth", auth, "notify", cfg.OrderNotifyEmail)
 	return sender, nil
 }

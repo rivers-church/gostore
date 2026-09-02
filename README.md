@@ -93,6 +93,7 @@ list with defaults.
 | `SMTP_TLS` | no | `starttls` | `starttls`, `tls` (implicit) or `none` (development only) |
 | `SMTP_USERNAME` / `SMTP_PASSWORD` | no | — | Omit both for a relay that authenticates by address |
 | `SMTP_OAUTH_TENANT_ID` / `SMTP_OAUTH_CLIENT_ID` / `SMTP_OAUTH_CLIENT_SECRET` | no⁵ | — | Authenticate with XOAUTH2 instead of a password. See [Microsoft Exchange Online](#microsoft-exchange-online) |
+| `GRAPH_TENANT_ID` / `GRAPH_CLIENT_ID` / `GRAPH_CLIENT_SECRET` | no⁶ | — | Send through Microsoft Graph instead of SMTP; wins when set. See [Microsoft Exchange Online](#microsoft-exchange-online) |
 | `EMAIL_REPLY_TO` | no | — | When replies should not go to `EMAIL_FROM` |
 | `ORDER_NOTIFY_EMAIL` | no | — | Sends a copy of each paid order to whoever packs it |
 | `IMAGE_DIR` | **yes**³ | — | Store images in this directory, served by this server |
@@ -145,6 +146,11 @@ authenticate — with the buyer's download link in the message it failed to send
 alongside `SMTP_PASSWORD` also refuses: which one authenticates would be a guess, and the
 loser would sit in the environment looking live. `SMTP_USERNAME` becomes required, because
 XOAUTH2 authenticates as a named mailbox.
+
+⁶ **All three or none, and it wins over SMTP when set.** `SMTP_HOST` does not need to be
+configured at all for a Graph-only deployment — `EMAIL_FROM` alone satisfies the mail
+requirement in that case. A half-configured Graph registration refuses to boot for the same
+reason a half-configured XOAUTH2 one does.
 
 ## Admin
 
@@ -1168,6 +1174,25 @@ a transactional relay, and it throttles accordingly. A dropped confirmation cost
 their download link, since it exists nowhere else. A dedicated transactional provider over
 ordinary SMTP is the lower-risk option for a storefront, and needs none of the above — just
 `SMTP_USERNAME` and `SMTP_PASSWORD`.
+
+**Graph is the alternative to the XOAUTH2 setup above**, not an addition to it — set
+`GRAPH_TENANT_ID`/`GRAPH_CLIENT_ID`/`GRAPH_CLIENT_SECRET` and Graph is used instead of SMTP,
+`SMTP_HOST` does not need to be set at all, and `EMAIL_FROM` still names the sending mailbox:
+
+```bash
+EMAIL_FROM=orders@example.com
+GRAPH_TENANT_ID=...
+GRAPH_CLIENT_ID=...
+GRAPH_CLIENT_SECRET=...
+```
+
+It needs a **different** app permission than the SMTP path — **`Mail.Send`** (application,
+admin-consented) for the `EMAIL_FROM` mailbox, not `SMTP.SendAsApp` — and no SMTP AUTH tenant
+setting at all, which is the appeal: no service principal, no per-mailbox SMTP AUTH toggle.
+The trade is on the wire, not in the setup: sends go as raw MIME to Graph's `sendMail`
+endpoint rather than through SMTP, and **Bcc has no envelope on this transport** — it travels
+as a real header instead, which is unverified against a live tenant. gostore never sets Bcc on
+either order email today, so this does not affect it either way; it matters if that changes.
 
 ### Email templates
 

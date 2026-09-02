@@ -789,3 +789,80 @@ func TestLoad_SMTPOAuthAndPasswordConflict(t *testing.T) {
 		t.Errorf("error = %v, want it to name SMTP_PASSWORD", err)
 	}
 }
+
+// setGraph configures a complete Graph app registration, so each case below can
+// break exactly one part of it.
+func setGraph(t *testing.T) {
+	t.Helper()
+	t.Setenv("GRAPH_TENANT_ID", "tenant-id")
+	t.Setenv("GRAPH_CLIENT_ID", "client-id")
+	t.Setenv("GRAPH_CLIENT_SECRET", "client-secret")
+	t.Setenv("EMAIL_FROM", "orders@example.com")
+}
+
+// A Graph-only deployment sets no SMTP_HOST at all, and that has to satisfy the
+// mail requirement on its own — EMAIL_FROM without a host is what Graph looks
+// like, not a half-configured relay.
+func TestLoad_GraphOnlySatisfiesTheMailRequirement(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://u:p@localhost:5432/gostore")
+	t.Setenv("PAYFAST_MERCHANT_ID", "10000100")
+	t.Setenv("PAYFAST_MERCHANT_KEY", "46f0cd694581a")
+	t.Setenv("IMAGE_DIR", t.TempDir())
+	setGraph(t)
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !c.Graph.Configured() {
+		t.Fatalf("Graph = %+v, want it configured", c.Graph)
+	}
+	if c.SMTP.Configured() {
+		t.Error("SMTP reported configured with no SMTP_HOST set")
+	}
+}
+
+// Half-configured Graph is a boot failure. The alternative is a store that
+// starts, takes an order, and only then discovers it cannot send.
+func TestLoad_GraphMustBeComplete(t *testing.T) {
+	for _, missing := range []string{
+		"GRAPH_TENANT_ID", "GRAPH_CLIENT_ID", "GRAPH_CLIENT_SECRET", "EMAIL_FROM",
+	} {
+		t.Run(missing, func(t *testing.T) {
+			setRequired(t)
+			setGraph(t)
+			// setRequired already set SMTP_HOST/EMAIL_FROM; clear SMTP_HOST so
+			// this exercises the Graph-only shape, then break one Graph var.
+			t.Setenv("SMTP_HOST", "")
+			t.Setenv(missing, "")
+
+			_, err := Load()
+			if err == nil {
+				t.Fatalf("a registration missing %s was accepted", missing)
+			}
+			if !strings.Contains(err.Error(), "must all be set") &&
+				!strings.Contains(err.Error(), "are required") {
+				t.Errorf("error = %v, want it to name the missing requirement", err)
+			}
+		})
+	}
+}
+
+// SMTP_HOST with no EMAIL_FROM is still a mistake even though Graph makes
+// EMAIL_FROM-without-a-host acceptable: a relay with no sender is not a working
+// configuration either way.
+func TestLoad_SMTPHostNeedsEmailFrom(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://u:p@localhost:5432/gostore")
+	t.Setenv("PAYFAST_MERCHANT_ID", "10000100")
+	t.Setenv("PAYFAST_MERCHANT_KEY", "46f0cd694581a")
+	t.Setenv("IMAGE_DIR", t.TempDir())
+	t.Setenv("SMTP_HOST", "localhost")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("SMTP_HOST with no EMAIL_FROM was accepted")
+	}
+	if !strings.Contains(err.Error(), "EMAIL_FROM") {
+		t.Errorf("error = %v, want it to name EMAIL_FROM", err)
+	}
+}
